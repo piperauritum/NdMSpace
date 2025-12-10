@@ -126,21 +126,16 @@ Monitoring is safe and does not leak resources.
 a = NdMSpace.enter;
 
 // Simple sine
-~osc = nd { |freq|
-    SinOsc.ar(freq, 0, 0.1)
-}.out(0).play;
+~osc = nd { |freq| SinOsc.ar(freq, 0, 0.1) }.out(0).play;
 
 // Modulation routed via persistent bus
-~lfo = nd {
-    SinOsc.ar(1).range(200, 1200)
-}.out(~osc[\freq]).play;
+~lfo = nd { SinOsc.ar(1).range(200, 1200) }.out(~osc[\freq]).play;
 
 // Update the function live — buses remain stable
-~osc = nd { |freq|
-    LFTri.ar(freq, 0, 0.1)
-};
+~osc = nd { |freq| LFTri.ar(freq, 0, 0.1) };
 
 // Cleaning up the space
+a.freeAll;
 a.reset;
 a.exit;
 ```
@@ -183,7 +178,7 @@ a.exit;
 ### Monitor everything:
 
 ```supercollider
-NdMSpace.current.dump;
+NdMSpace.dump;
 ```
 
 ---
@@ -194,31 +189,22 @@ NdMSpace.current.dump;
 a = NdMSpace.enter;
 
 // 1. Start main voice
-~main = nd { |mod|
-    SinOsc.ar(mod * 300 + 400) * 0.2
-}.out(0).play;
+~main = nd { |mod| SinOsc.ar(mod * 300 + 400) * 0.2 }.out(0).play;
 
 // 2. Add modulation
-~mod = nd {
-    LFNoise2.ar(1).range(0.1, 3.0)
-}.out(~main[\mod]).play;
+~mod = nd { LFNoise2.ar(1).range(0.1, 3.0) }.out(~main[\mod]).play;
 
 // 3. Add another modulator
-~mod1 = nd {
-    LFPulse.ar(10)
-}.out(~main[\mod]).play;
+~mod1 = nd { LFPulse.ar(10) }.out(~main[\mod]).play;
 
 // 4. Redefine main voice — modulation continues
-~main = nd { |mod|
-    LFTri.ar(mod * 500 + 200) * 0.2
-};
+~main = nd { |mod| LFTri.ar(mod * 500 + 200) * 0.2 };
 
 // 5. Replace modulator — bus index stays the same
-~mod1 = nd {
-    SinOsc.ar(8, 0, 0.1)
-}.out(~main[\mod]);
+~mod1 = nd { SinOsc.ar(8, 0, 0.1) }.out(~main[\mod]);
 
 // Cleanup
+a.freeAll;
 a.reset;
 a.exit;
 ```
