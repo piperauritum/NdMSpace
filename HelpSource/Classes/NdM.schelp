@@ -1,0 +1,217 @@
+class:: NdM
+categories:: Live Coding
+summary:: Ndef-based modular node wrapper with stable argument buses, fade/switch control, and NdMSpace integration
+
+DESCRIPTION::
+
+link::Classes/NdM:: is a stateful wrapper around link::Classes/Ndef:: used by link::Classes/NdMSpace::.
+It provides **stable argument buses**, **per-node fade control**, and **function switching**
+so that a running sound can be redefined safely during live coding.
+
+When an NdM is created, it allocates (or reuses) a one-channel bus for each argument of the UGen
+function, and the mapping strong::(key, argName) → (busIndex, rate):: is stored in the global
+history manager link::Classes/NdMNameSpace::.
+Because this mapping persists across redefinitions, modulators connected to these buses continue to work
+even if the NdM function is replaced, and even if the NdM instance is freed and recreated later.
+
+NdM also inserts internal control arguments strong::ndmAmp:: and strong::ndmFade:: for smooth
+fade-in, fade-out, and function switching without clicks. These are implemented using VarLag and
+a gated envelope inside the proxy function.
+
+NdM is normally not instantiated directly; instead it is created via strong::nd-notation:: inside an
+active NdMSpace, for example:
+
+code::
+~osc = nd { SinOsc.ar(440, 0, 0.1) }.out(0).play;
+::
+
+CLASSMETHODS::
+
+private::initClass
+
+subsection::Creation
+
+method::new
+Create (or reuse) an NdM node for the given symbolic strong::key::.
+If an NdM with the same key already exists, its UGen function is replaced
+and its argument buses are reused; otherwise a new internal link::Classes/Ndef::
+and argument buses are allocated.
+In all cases, the mapping is stored or updated in link::Classes/NdMNameSpace::.
+
+argument::key
+The symbolic identifier of the NdM.
+Suffixes strong::_a:: and strong::_k:: specify default argument rate (audio or control).
+
+argument::func
+A UGen function strong::{ |arg1, arg2, ...| ... }::.
+Each argument reads from its bus using strong::InFeedback.ar:: or strong::In.kr:: based on rate.
+The function’s return signal must match the rate of the output bus.
+
+argument::outbus
+Optional output bus specification (Integer, Bus, Array, or nil).
+If strong::nil::, a default audio-rate bus 0 is used.
+A concise error is thrown via link::Classes/NdMError:: if the signal/bus rate mismatches.
+
+INSTANCEMETHODS::
+
+method::play
+Start the NdM by building a proxy function that:
+
+list::
+## Reads all argument buses
+## Evaluates strong::func::
+## Applies fade processing via strong::ndmAmp:: and strong::ndmFade::
+## Applies function-switch gating when necessary
+## Writes the result to strong::outbus::
+::
+
+Then strong::proxy.play:: is called.
+If fade time is set (via strong::fade::), audio enters smoothly.
+
+method::stop
+Fade out and stop audio playback.
+The NdM instance, its buses, and its history in link::Classes/NdMNameSpace::
+remain intact so you can call play again.
+
+method::free
+Fade out, clear the proxy, free argument buses, and unregister the NdM from the live-node table.
+The bus history strong::(argName → busIndex, rate):: remains stored in NdMNameSpace
+so that future NdM nodes with the same key reuse the same buses.
+
+method::fade
+Get or set the fade time in seconds used by play/stop/free and function switching.
+
+method::bus
+Return the link::Classes/Bus:: assigned to strong::argName::.
+This is used to connect modulators (e.g., nd LFOs writing into parameter buses).
+
+method::b
+Return only the bus index for strong::argName:: (equivalent to strong::bus(argName).index::).
+
+subsection::Rate Control
+
+NdM supports rate inference through argument suffixes and name suffixes:
+
+list::
+## Argument suffix _a / _k overrides everything.
+## Name suffix _a / _k sets default rate for arguments without suffix.
+## Default rate (no suffix) is audio.
+::
+
+Example:
+
+code::
+NdM(\osc_k, { |freq_a, pan|
+    ...
+});
+::
+
+list::
+## strong::freq_a:: → audio-rate (argument suffix)
+## strong::pan:: → control-rate (name suffix \osc_k)
+::
+
+subsection::Fade / Switch Behaviour
+
+NdM uses two internal control parameters:
+
+list::
+## strong::ndmAmp:: — smoothed with VarLag for play/stop/free fades
+## strong::ndmGate:: — envelope for function switching
+::
+
+When the function is changed (via nd-notation or NdMSpace assignment),
+
+list::
+## old function fades out
+## new function fades in
+::
+
+without clicks, using a short-lived gated envelope.
+
+subsection::Rate mismatch detection
+
+If the returned signal rate disagrees with the output-bus rate,
+strong::NdMError:: is thrown with a message like:
+
+list::
+## NdM: rate mismatch (sig=ar, bus=kr)
+::
+
+subsection::Monitoring with NdMNameSpace
+
+link::Classes/NdMNameSpace:: stores:
+
+list::
+## existing NdM instances per key
+## the mapping strong::argName → (busIndex, rate)::
+## tag associations used by NdMTag and NdMSpace
+::
+
+You may inspect the state using:
+
+code::
+NdMNameSpace.dumpStatus;
+::
+
+This includes both live nodes and preserved argument histories.
+
+EXAMPLES::
+
+subsection::Using NdM directly (without NdMSpace)
+
+code::
+// Create an NdM node with outbus 0
+NdM(\ndm, { SinOsc.ar(440, 0, 0.1) }, 0);
+
+// Use fade for a smooth start
+NdM(\ndm).fade = 1.0;
+NdM(\ndm).play;
+
+// Inspect bus mapping and node state
+NdMNameSpace.dumpStatus;
+
+// Later, you can fade out and free:
+NdM(\ndm).stop;
+NdM(\ndm).free;
+::
+
+subsection::Basic usage inside NdMSpace
+
+code::
+a = NdMSpace.enter;
+
+// Creates an NdM node but does not play yet.
+// The argument bus for 'mod' is allocated and registered.
+~car = nd { |mod| DC.ar(mod) };
+
+NdMNameSpace.dumpStatus;
+::
+
+subsection::Connecting modulators
+
+code::
+~car = nd { |mod| SinOsc.ar(mod * 100 + 200, 0, 0.1) }.out([0, 1]).play;
+
+~mod = nd { SinOsc.ar(5) }.out(~car[\mod]).play;
+
+NdMNameSpace.dumpStatus;
+
+a.freeAll;
+::
+
+Here, the bus for strong::mod:: remains stable even if ~car is redefined.
+
+subsection::Rate suffixes
+
+code::
+~suf = nd { |frq_a, pan_k| SinOsc.ar(frq_a).dup * pan_k };
+
+NdMNameSpace.dumpKey(\suf);
+
+a.reset;
+a.exit;
+::
+
+This creates an audio-rate and control-rate bus respectively, visible in NdMNameSpace.
+

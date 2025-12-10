@@ -1,0 +1,354 @@
+class:: NdMSpace
+categories:: Live Coding
+summary:: NdM environment
+
+DESCRIPTION::
+
+link::Classes/NdMSpace:: is a live-coding container that manages NdM objects as environment variables (strong::~key::),
+similar in usage to link::Classes/ProxySpace::.
+When a function or value is assigned to strong::~key = ...:: while an NdMSpace is active,
+or when a function is wrapped with strong::nd { ... }:: and stored into a key,
+it is automatically converted into an NdM instance, which can then be controlled uniformly through
+methods such as strong::play::, strong::stop::, strong::free::, strong::out::, strong::fade::, and strong::tag::.
+
+When strong::enter:: is called, the NdMSpace becomes the active environment,
+and all strong::~key:: lookups resolve to this space.
+Each key creates or updates an NdM node, and multiple NdMSpaces may be entered or exited,
+allowing the user to switch environments cleanly.
+Calling strong::exit:: restores the previous environment without destroying the stored NdM objects.
+
+NdMSpace provides unified management of NdM registration, tag grouping, node state inspection,
+argument-bus (argBus) allocation, and cleanup routines.
+It also offers space-wide operations such as strong::stopAll::, strong::freeAll::, strong::reset::, and strong::clean::,
+enabling safe handling of large sets of NdM nodes during live coding.
+
+To ensure proper coordination with fade operations, strong::fadeGap:: specifies a minimum waiting time
+between issuing fade-related commands and performing cleanup.
+This prevents premature bus reuse or node removal while fade envelopes are still active on the server.
+
+subsection::First Example
+
+code::
+a = NdMSpace.enter;
+~car = nd { |mod| SinOsc.ar(mod * 200 + 400, 0, 0.2) }.out([0, 1]).play;
+~mod0 = nd { SinOsc.ar(10) }.out(~car[\mod]).fade(5);
+~mod1 = nd { LFNoise0.ar(1) }.out(~car[\mod]).fade(5);
+~mod0.play;
+~mod1.play;
+~mod0.stop;
+~mod1.stop;
+~car.stop;
+a.reset;
+a.exit;
+::
+
+note::
+For a full teardown of an NdMSpace, use strong::reset:: followed by strong::exit::.
+Calling strong::clean:: only removes stale references and does not clear keys, argument buses, or tags.
+Thus strong::clean:: -> strong::exit:: leaves NdM objects and environment bindings in place,
+and does not constitute a complete shutdown of the space.
+::
+
+CLASSMETHODS::
+
+subsection::Creation
+
+method::enter
+Create and activate a new NdMSpace.
+The environment becomes the current top-level mapping for NdM keys (strong::~osc::, strong::~lfo:: etc.).
+If another NdMSpace is already active, it is preserved and can be restored by calling its strong::exit:: method.
+The returned object is the newly created NdMSpace instance.
+
+method::exit
+Leave the currently active NdMSpace.
+All mappings, NdM nodes, and tag associations remain stored in the instance, but the global environment is restored to the state prior to strong::enter::.
+This method does not free or stop nodes automatically; users may call strong::stopAll:: or strong::freeAll:: explicitly if required.
+
+method::fromFunction
+Create a temporary NdMSpace, evaluate a function within it, and return the resulting space.
+Useful for building a space programmatically without affecting the current environment.
+
+method::current
+Return the NdMSpace instance that is currently active.
+If no NdMSpace has been entered, this returns strong::nil::.
+
+subsection::Lookup
+
+method::get
+Retrieve an NdM instance by key symbol.
+Equivalent to accessing strong::~key:: while the NdMSpace is active.
+Returns strong::nil:: if the key is unbound.
+
+method::nodes
+Return all NdM instances currently registered in the active NdMSpace.
+This includes both playing and stopped nodes.
+
+subsection::Class-side control
+
+method::stopAll
+Send a stop request to all NdM instances in the active NdMSpace.
+Fade-out is applied according to each instance’s fade settings.
+
+method::freeAll
+Free all NdM instances in the active NdMSpace and clear associated server nodes.
+Argument buses remain allocated unless explicitly cleared by strong::reset:: or strong::clean::.
+
+method::reset
+Clear all NdM mappings, argument buses, and tag associations from the active NdMSpace.
+This prepares the space for a fresh set of definitions.
+
+method::clean
+Remove internal references to NdM objects that have been freed or are no longer active.
+This does not modify active nodes.
+
+method::status
+Print a summary of the active NdMSpace:
+registered keys, tag distribution, output buses, and basic lifecycle information.
+
+method::dump
+Post the full internal state of the active NdMSpace in a human-readable form.
+This includes keys, associated NdM instances, argument buses, and monitor information.
+
+method::dumpKey
+Post detailed information for a single NdM key.
+Useful for debugging function definitions, argument bus assignments, and tag membership.
+
+subsection::Class-side tags
+
+method::stopTag
+Stop all NdM instances associated with the given tag symbol.
+Fade-out is applied.
+
+method::playTag
+Play or re-activate all NdM instances under the given tag symbol.
+
+method::freeTag
+Free all NdM instances associated with the given tag symbol.
+Removes server nodes immediately after fade-out.
+
+method::tags
+Return a list of all tag symbols currently registered in the active NdMSpace.
+
+method::nodesForTag
+Return all NdM instances associated with the given tag symbol.
+
+
+
+
+INSTANCEMETHODS::
+
+subsection::Space control
+
+method::exit
+Restore the environment that was active before this NdMSpace was entered.
+The mappings and NdM nodes belonging to this space remain stored in the instance, and can be reactivated again by calling strong::enter::.
+This does not automatically stop or free nodes.
+
+method::stopAll
+Send a stop request to all NdM instances registered in this NdMSpace.
+Fade-out is applied according to each instance’s own fade settings.
+
+method::freeAll
+Free all NdM instances managed by this NdMSpace.
+Server nodes are removed after their release envelopes complete.
+Argument buses remain allocated until explicitly cleaned.
+
+method::reset
+Clear all key–NdM mappings, argument buses, and tag associations managed by this NdMSpace.
+This prepares the space for rebuilding from scratch.
+
+method::clean
+Remove references to NdM instances that have been freed, stopped permanently, or are no longer valid.
+Does not affect currently active nodes.
+
+method::status
+Post a short summary of this NdMSpace, including current keys, node states, and basic allocation details.
+
+method::fadeGap
+Get or set the class-level delay (in seconds) that NdMSpace waits after issuing fade-related operations such as strong::stopAll:: or strong::freeAll::.
+This gap allows fade envelopes to finish on the server before node cleanup, bus reuse, or internal resets occur.
+
+
+subsection::Lookup
+
+method::get
+Retrieve an NdM instance in this NdMSpace by key symbol.
+Equivalent to reading strong::~key:: while this space is active.
+Returns strong::nil:: if the key is not present.
+
+method::nodes
+Return all NdM instances registered in this NdMSpace.
+Includes playing, stopped, and dormant nodes.
+
+subsection::Tag control
+
+method::stopTag
+Stop all NdM instances associated with the given tag symbol in this space.
+Fade-out is applied.
+
+method::playTag
+Play or re-activate all NdM instances associated with the given tag symbol.
+
+method::freeTag
+Free all NdM instances associated with the given tag symbol.
+Nodes are removed from the server after fade-out.
+
+method::tags
+Return all tag symbols currently tracked by this NdMSpace.
+
+method::nodesForTag
+Return all NdM instances associated with the given tag symbol.
+Useful for monitoring, group control, or batch operations.
+
+subsection::Monitoring
+
+method::dump
+Post the full internal state of this NdMSpace, including NdM keys, argument buses, tags, and monitor data.
+
+method::dumpKey
+Post detailed information about a specific NdM key within this NdMSpace.
+Shows function details, argument buses, output mapping, and tag membership.
+
+subsection::Internal
+
+method::initForServer
+Internal method.
+Initialize this NdMSpace for a specific server instance.
+Called automatically when entering the space or creating proxies; not intended for direct user invocation.
+
+method::makeProxy
+Internal method.
+Create and register a proxy object (usually an NdM instance) for a given key.
+Called when a new strong::~key:: is assigned.
+
+method::put
+Internal method.
+Store an NdM instance or value under a given key symbol inside this NdMSpace.
+Used by assignment and internal update routines.
+
+
+EXAMPLES::
+
+subsection::Preparing NdMSpace and a basic node
+
+code::
+// ** Enter NdMSpace mode and get a front-end handle **
+
+a = NdMSpace.enter;
+
+// ** Basic node setup **
+
+~osc = nd { SinOsc.ar(440, 0, 0.2) };	// define audio function for this node
+~osc.out([0,1]);	// set output bus (stereo: buses 0 and 1)
+~osc.fade(1);		// set fade time (seconds) for play/stop/free
+~osc.tag(\osc);		// add tag \osc to this node
+~osc.play;			// start playback with fade-in
+
+// ** The same can be written with method chaining **
+
+~osc = nd { SinOsc.ar(440, 0, 0.2) }.out([0,1]).fade(1).tag(\osc).play;
+
+// ** Start / stop /  free the node **
+
+~osc.play;          // resume playback with fade-in
+~osc.stop;          // stop with fade-out (keep node for later reuse)
+~osc.free;          // free the underlying NodeProxy / Synth and release resources
+::
+
+subsection::Inspecting and replacing a node
+
+code::
+// ** Inspect node properties **
+
+~osc.key;           // get the NdM key (symbol name)
+~osc.out;           // get current output bus specification
+~osc.fade;          // get current fade time
+~osc.tag;           // get current tag list for this node
+~osc.func.postcs;   // print current function source code to the post window
+
+// ** Replace the function (carrier waveform change) **
+
+~osc = nd { LFTri.ar(100, 0, 0.2) };   // assign a new function; key and buses are kept
+
+// ** Fade time when switching functions **
+
+~osc.switchDur;         // get current function-switch fade time
+~osc.switchDur = 0.05;  // set crossfade time (seconds) when replacing the function
+
+// ** Debug-related flags **
+
+~osc.dbg = 1;       // enable debug logging for this node
+~osc.poll = 1;      // enable polling for debug UGens inside this node
+~osc.dbg = 0;       // disable debug logging
+~osc.poll = 0;      // disable polling
+::
+
+subsection::Connecting NdMs via argument buses
+
+code::
+// ** Connect nodes: carrier and modulators **
+
+~car = nd { |mod| SinOsc.ar(mod * 200 + 200, 0, 0.2) }.out([0,1]).fade(2).tag(\fm);
+~mod0 = nd { SinOsc.ar(10).range(0, 1) }.out(~car[\mod]).fade(2).tag(\fm);
+~mod1 = nd { LFNoise0.ar(1) }.out(~car[\mod]).fade(2).tag(\fm);	// Add another modulation signal to same bus
+
+// ** Obtain argument buses **
+
+~car.bus(\mod);  // explicitly get the Bus object for argument \mod
+~car[\mod];      // shorthand access to the bus for argument \mod
+
+~car.play;
+~car.stop;
+~mod0.play;
+~mod0.stop;
+~mod1.play;
+~mod1.stop;
+
+// ** Specifying signal rate of argument buses with _a/_k suffixes **
+
+~osc = nd { | frq_a, amp_k | SinOsc.ar(frq_a, 0, amp_k) };	// frq_a -> ar, amp_k -> kr
+~osc_k = nd { | frq, amp | SinOsc.ar(frq, 0, amp) };		// frq -> kr, amp -> kr
+~osc_k = nd { | frq_a, amp | SinOsc.ar(frq_a, 0, amp) };	// frq_a -> ar, amp -> kr
+a.dumpKey(\osc);	// dump internal NdM namespace / monitor status, by key
+a.dumpKey(\osc_k);
+::
+
+subsection::Tag-based group control
+
+code::
+// ** Tag-based control from the NdMSpace handle **
+
+a.stopTag(\fm);  // stop all NdM instances tagged with \fm
+a.playTag(\fm);  // play all NdM instances tagged with \fm
+a.freeTag(\fm);  // free all NdM instances tagged with \fm
+
+// ** Tag inspection and edit **
+
+~osc.tag;
+~osc.untag(\osc);    // remove tag \osc from this node
+a.tags;              // list all tags currently registered in NdMSpace
+::
+
+subsection::Namespace-level utilities
+
+code::
+// ** Global control from NdMSpace handle **
+
+a.stopAll;       // stop all NdM instances (fade-out only)
+a.freeAll;       // free all NdM instances
+a.dump;          // dump internal NdM namespace / monitor status
+a.reset;         // reset NdMNameSpace (clear key registry without playing anything)
+a.clean;	        // free all NdM instances and then reset NdMNameSpace
+a.status;        // print a compact list of active NdM instances
+a.fadeGap;       // get global fade gap (delay before VarLag-based fade uses fade time)
+a.exit;          // leave NdMSpace and restore the previous Environment
+
+a.nodes.do { |ndm| ndm.key.postln };                 // print keys of all active NdM instances
+a.nodesForTag(\fm).do { |ndm| ndm.key.postln };      // print keys of all NdM instances tagged with \fm
+
+// ** Retrieve an NdM instance by key **
+
+b = a.get(\osc);    // look up NdM instance whose key is \mod1
+b.tag(\hoge);
+b.tag;
+::
