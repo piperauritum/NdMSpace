@@ -258,7 +258,7 @@ a = NdMSpace.enter;
 subsection::Inspecting and replacing a node
 
 code::
-// ** Inspect node properties **
+// ** Inspect node properties (before free) **
 
 ~osc.key;           // get the NdM key (symbol name)
 ~osc.out;           // get current output bus specification
@@ -268,7 +268,7 @@ code::
 
 // ** Replace the function (carrier waveform change) **
 
-~osc = nd { LFTri.ar(100, 0, 0.2) };   // assign a new function; key and buses are kept
+~osc = nd { LFTri.ar(220, 0, 0.2) };   // assign a new function; key and buses are kept
 
 // ** Fade time when switching functions **
 
@@ -278,7 +278,7 @@ code::
 // ** Debug-related flags **
 
 ~osc.dbg = 1;       // enable debug logging for this node
-~osc.poll = 1;      // enable polling for debug UGens inside this node
+~osc.poll = 1;      // enable polling of NdM's internal fade UGens (VarLag / EnvGen)
 ~osc.dbg = 0;       // disable debug logging
 ~osc.poll = 0;      // disable polling
 ::

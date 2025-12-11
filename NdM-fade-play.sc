@@ -71,10 +71,6 @@
 
 				signalRate = signal.rate;
 
-				// VarLag フェード
-				// fadeEnv = VarLag.kr(ndmAmp, ndmFade);
-				// fadeEnv.poll(20, "[NdM] fadeEnv");
-
 				// Smooth fade (play/stop/free) handled by VarLag.
 				fadeEnv = VarLag.kr(ndmAmp, ndmFade);
 
@@ -392,11 +388,11 @@
 				};
 
 				if(argBuses.notNil) {
-					argBuses.do { |bus|
-						if(bus.notNil) {
-							bus.free;
-						};
-					};
+					// argBuses.do { |bus|
+					// 	if(bus.notNil) {
+					// 		bus.free;
+					// 	};
+					// };
 					argBuses = nil;
 				};
 
@@ -436,11 +432,11 @@
 				};
 
 				if(argBuses.notNil) {
-					argBuses.do { |bus|
-						if(bus.notNil) {
-							bus.free;
-						};
-					};
+					// argBuses.do { |bus|
+					// 	if(bus.notNil) {
+					// 		bus.free;
+					// 	};
+					// };
 					argBuses = nil;
 				};
 
@@ -468,11 +464,11 @@
 		};
 
 		if(argBuses.notNil) {
-			argBuses.do { |bus|
-				if(bus.notNil) {
-					bus.free;
-				};
-			};
+			// argBuses.do { |bus|
+			// 	if(bus.notNil) {
+			// 		bus.free;
+			// 	};
+			// };
 			argBuses = nil;
 		};
 

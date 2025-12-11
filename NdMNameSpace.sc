@@ -12,8 +12,8 @@ PURPOSE:
 which wipes all history and nodes.
 
 DESIGN NOTES:
-- NdMNameSpace does NOT perform any resource cleanup of Bus objects.
-NdM is responsible for freeing its own Buses.
+- NdMNameSpace performs Bus cleanup only on `.reset`.
+NdM.free / freeAll do not free Bus objects individually.
 - History persists across NdM re-creations.
 - Nodes are added/removed explicitly by NdM.init / NdM.free.
 
@@ -76,11 +76,63 @@ NdMNameSpace : Object {
 		^monInst;
 	}
 
+	// *reset {
+	// 	// explicit reset: fully discard the previous singleton instance
+	// 	"NdMNameSpace: reset".postln;
+	// 	monInst = nil;            // drop old instance reference (hard reset)
+	// 	monInst = super.new.init; // create a fresh new monitor instance
+	// 	^monInst;
+	// }
+
 	*reset {
-		// explicit reset: fully discard the previous singleton instance
+		var oldInst;
+		var server;
+		var stateTable;
+		var argsTableLocal;
+		var busIndexLocal;
+		var rateSymbolLocal;
+		var busLocal;
+
 		"NdMNameSpace: reset".postln;
-		monInst = nil;            // drop old instance reference (hard reset)
-		monInst = super.new.init; // create a fresh new monitor instance
+
+		oldInst = monInst;
+
+		if(oldInst.notNil) {
+			server = Server.default;
+			stateTable = oldInst.stateByKey;
+
+			if(stateTable.notNil) {
+				stateTable.keysValuesDo { |keySymbol, stateLocal|
+					var argsTableLocal2;
+
+					// stateLocal は \node/\args/\tags を持つ IdentityDictionary のはず
+					if(stateLocal.notNil) {
+						argsTableLocal2 = stateLocal[\args];
+
+						if(argsTableLocal2.notNil) {
+							argsTableLocal2.keysValuesDo { |argNameLocal, argInfoLocal|
+								busIndexLocal = argInfoLocal[\busIndex];
+
+								if(busIndexLocal.notNil) {
+									rateSymbolLocal = argInfoLocal[\rate];
+									if(rateSymbolLocal.isNil) {
+										rateSymbolLocal = \audio;
+									};
+
+									// NdM が予約していた bus をここで解放
+									busLocal = Bus.new(rateSymbolLocal, busIndexLocal, 1, server);
+									busLocal.free;
+								};
+							};
+						};
+					};
+				};
+			};
+		};
+
+		// ここでモニタを作り直す
+		monInst = nil;
+		monInst = super.new.init;
 		^monInst;
 	}
 
