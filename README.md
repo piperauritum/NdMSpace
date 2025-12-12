@@ -93,6 +93,50 @@ Via NdM:
 are normalized and rate-checked before patching.
 NdMSpace keeps these mappings consistent across function updates.
 
+### **Output mapping rules (important)**
+
+NdM defines explicit and predictable rules for mapping signals to output buses.
+
+#### 1. Mono signal → multiple buses
+
+If the function returns a mono signal and `.out` receives multiple buses:
+
+```supercollider
+~osc = nd { SinOsc.ar(100) }.out([0, 1]).play;
+````
+
+the same signal is written independently to each bus:
+
+```supercollider
+Out.ar(0, sig);
+Out.ar(1, sig);
+```
+
+This is **not duplication via channel expansion**, and does not cause leakage
+or unintended summing. The result is centered playback.
+
+#### 2. Multi-channel signal → multiple buses
+
+If the function returns an array and the number of channels matches
+the number of buses:
+
+```supercollider
+~osc = nd { Pan2.ar(SinOsc.ar(100), 0) }.out([0, 1]).play;
+```
+
+each channel is mapped one-to-one to each bus, equivalent to standard
+`Out.ar(bus, sig)` behavior in SuperCollider.
+
+#### 3. Channel/bus count mismatch
+
+Mappings where the number of signal channels does not match the number
+of buses (except mono → N) are currently undefined and should be avoided.
+
+#### 4. Bus objects
+
+`.out` accepts integers, `Bus` objects, or arrays of either.
+All buses are normalized internally before patching.
+
 ---
 
 ## 5. **Argument-rate inference from key names**

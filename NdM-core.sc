@@ -359,15 +359,15 @@ NdM : Object {
 		^this.bus(argName).index;
 	}
 
-    // ~car[\mod] -> ~car.bus(\mod)
+	// ~car[\mod] -> ~car.bus(\mod)
 	at { |argName|
-        var symbol;
-        var busLocal;
+		var symbol;
+		var busLocal;
 
-        symbol = argName.asSymbol;
-        busLocal = this.bus(symbol);
-        ^busLocal;
-    }
+		symbol = argName.asSymbol;
+		busLocal = this.bus(symbol);
+		^busLocal;
+	}
 
 	// Read argument buses as UGen inputs, respecting their audio/control rate.
 	readArgValues { |busesLocal, argNamesLocal, argRatesLocal|
@@ -397,6 +397,23 @@ NdM : Object {
 		var busIndex;
 		var busRate;
 		var result;
+		var isArray;
+		var idxArray;
+		var rateFirst;
+		var hasRate;
+		var hasError;
+		var msg;
+		var elem;
+		var idx;
+		var rateNow;
+
+		hasError = false;
+
+		this.debugPost(
+			"[NdM.resolveOutBus] key: " ++ key.asString
+			++ "  outbusLocal: " ++ outbusLocal.asString
+			++ "  class: " ++ outbusLocal.class.asString
+		);
 
 		if(outbusLocal.isNil) {
 			busIndex = 0;
@@ -406,15 +423,91 @@ NdM : Object {
 				busIndex = outbusLocal.index;
 				busRate = outbusLocal.rate;
 			} {
-				// Integers/arrays imply audio-rate output.
-				busIndex = outbusLocal;
-				busRate = \audio;
+				isArray = outbusLocal.isKindOf(Array);
+
+				if(isArray) {
+					if(outbusLocal.size <= 0) {
+						NdMError("NdM: outbus array is empty").throw;
+					};
+
+					idxArray = Array.new;
+					rateFirst = nil;
+					hasRate = false;
+
+					outbusLocal.do { |x|
+						elem = x;
+						idx = nil;
+						rateNow = nil;
+
+						if(elem.isKindOf(Bus)) {
+							idx = elem.index;
+							rateNow = elem.rate;
+						} {
+							if(elem.isKindOf(Integer)) {
+								idx = elem;
+								rateNow = \audio; // integer は audio out とみなす
+							} {
+								msg = "NdM: outbus array element must be Bus or Integer, got: "
+								++ elem.class.asString;
+								NdMError(msg).throw;
+							};
+						};
+
+						if(hasRate.not) {
+							rateFirst = rateNow;
+							hasRate = true;
+						} {
+							if(rateNow != rateFirst) {
+								msg = "NdM: mixed bus rates in outbus array ("
+								++ rateFirst.asString ++ " vs " ++ rateNow.asString ++ ")";
+								NdMError(msg).throw;
+							};
+						};
+
+						idxArray = idxArray.add(idx);
+					};
+
+					busIndex = idxArray;
+					busRate = rateFirst ? \audio;
+				} {
+					// Integer 等：audio out 扱い
+					busIndex = outbusLocal;
+					busRate = \audio;
+				};
 			};
 		};
+
+		this.debugPost(
+			"[NdM.resolveOutBus] => busIndex: " ++ busIndex.asString
+			++ "  busRate: " ++ busRate.asString
+		);
 
 		result = [busIndex, busRate];
 		^result;
 	}
+
+	// resolveOutBus { |outbusLocal|
+	// 	var busIndex;
+	// 	var busRate;
+	// 	var result;
+	//
+	// 	if(outbusLocal.isNil) {
+	// 		busIndex = 0;
+	// 		busRate = \audio;
+	// 	} {
+	// 		if(outbusLocal.isKindOf(Bus)) {
+	// 			busIndex = outbusLocal.index;
+	// 			busRate = outbusLocal.rate;
+	// 		} {
+	// 			// Integers/arrays imply audio-rate output.
+	// 			busIndex = outbusLocal;
+	// 			busRate = \audio;
+	// 		};
+	// 	};
+	//
+	// 	result = [busIndex, busRate];
+	// 	^result;
+	// }
 
 	// Ensure output signal rate matches target bus's rate (ar/kr).
 	checkRateMatch { |busRate, signalRate|
@@ -434,13 +527,96 @@ NdM : Object {
 
 	// Write the signal to the given busIndex (or Array of indices).
 	// Multi-channel and multi-out behavior follows Out.kr / Out.ar.
-	writeSignalToBus { |signal, busIndex, busRate|
-		if(busRate == \control) {
-			Out.kr(busIndex, signal);
-		} {
-			Out.ar(busIndex, signal);
+	writeSignalToBus { |signalIn, busIndexIn, busRateIn|
+		var signalLocal;
+		var busIndexLocal;
+		var busRateLocal;
+		var outFunc;
+		var indexCount;
+		var chanCount;
+		var idx;
+		var sigChan;
+
+		signalLocal = signalIn;
+		busIndexLocal = busIndexIn;
+		busRateLocal = busRateIn;
+
+		this.debugPost(
+			"[NdM.writeSignalToBus] key: " ++ key.asString
+			++ "  signalClass: " ++ signalLocal.class.asString
+			++ "  busIndex: " ++ busIndexLocal.asString
+			++ "  busRate: " ++ busRateLocal.asString
+		);
+
+		if(busIndexLocal.isNil) {
+			NdMError("NdM: resolved outbus index is nil").throw;
 		};
+
+		outFunc = if(busRateLocal == \control) {
+			{ |busNum, sig| Out.kr(busNum, sig) }
+		} {
+			{ |busNum, sig| Out.ar(busNum, sig) }
+		};
+
+		if(busIndexLocal.isKindOf(Array)) {
+			indexCount = busIndexLocal.size;
+
+			if(signalLocal.isKindOf(Array)) {
+				chanCount = signalLocal.size;
+
+				if(chanCount == indexCount) {
+					// ch 対応マッピング（既存）
+					idx = 0;
+					while { idx < indexCount } {
+						sigChan = signalLocal[idx];
+
+						this.debugPost(
+							"[NdM.writeSignalToBus] calling Out: bus="
+							++ busIndexLocal[idx].asString
+							++ " sigClass=" ++ sigChan.class.asString
+						);
+
+						outFunc.(busIndexLocal[idx], sigChan);
+						idx = idx + 1;
+					};
+				} {
+					// サイズ不一致は従来互換
+					this.debugPost(
+						"[NdM.writeSignalToBus] calling Out (array bus, mismatch): bus="
+						++ busIndexLocal.asString
+					);
+					outFunc.(busIndexLocal, signalLocal);
+				};
+			} {
+				// ★ mono signal: dup しない。各バスに mono を個別に書く（リーク防止）
+				idx = 0;
+				while { idx < indexCount } {
+					this.debugPost(
+						"[NdM.writeSignalToBus] calling Out (mono map): bus="
+						++ busIndexLocal[idx].asString
+					);
+					outFunc.(busIndexLocal[idx], signalLocal);
+					idx = idx + 1;
+				};
+			};
+		} {
+			this.debugPost(
+				"[NdM.writeSignalToBus] calling Out (single bus): bus="
+				++ busIndexLocal.asString
+			);
+			outFunc.(busIndexLocal, signalLocal);
+		};
+
+		signalIn
 	}
+
+	// writeSignalToBus { |signal, busIndex, busRate|
+	// 	if(busRate == \control) {
+	// 		Out.kr(busIndex, signal);
+	// 	} {
+	// 		Out.ar(busIndex, signal);
+	// 	};
+	// }
 
 	// Unified getter/setter interface for output bus routing.
 	out { |val|
@@ -478,17 +654,17 @@ NdM : Object {
 		};
 	}
 
-/*	isPlaying {
-		var proxyLocal;
-		var flag;
+	/*	isPlaying {
+	var proxyLocal;
+	var flag;
 
-		proxyLocal = proxy;
-		if(proxyLocal.isNil) {
-			flag = false;
-		} {
-			flag = proxyLocal.isPlaying;
-		};
+	proxyLocal = proxy;
+	if(proxyLocal.isNil) {
+	flag = false;
+	} {
+	flag = proxyLocal.isPlaying;
+	};
 
-		^flag;
+	^flag;
 	}*/
 }

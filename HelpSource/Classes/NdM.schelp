@@ -48,9 +48,24 @@ Each argument reads from its bus using strong::InFeedback.ar:: or strong::In.kr:
 The function’s return signal must match the rate of the output bus.
 
 argument::outbus
-Optional output bus specification (Integer, Bus, Array, or nil).
+Optional output bus specification.
+This can be one of:
+
+list::
+## Integer: audio-rate output starting bus index.
+## Bus: output starting bus index is strong::bus.index::, and the output rate follows strong::bus.rate::.
+## Array: a list of output targets. Each element must be an Integer or a Bus.
+::
+
 If strong::nil::, a default audio-rate bus 0 is used.
-A concise error is thrown via link::Classes/NdMError:: if the signal/bus rate mismatches.
+
+When an Array is given, NdM normalizes it to a list of bus indices.
+Array elements may be Integers or Buses; Array[Bus] is supported.
+
+note::
+If an Array contains Bus objects, all Bus elements must share the same rate
+(audio or control). Mixed bus rates inside one Array are not supported and throw NdMError.
+::
 
 INSTANCEMETHODS::
 
@@ -80,6 +95,39 @@ so that future NdM nodes with the same key reuse the same buses.
 
 method::fade
 Get or set the fade time in seconds used by play/stop/free and function switching.
+
+subsection::Output routing (out / out_)
+
+NdM writes the return signal of strong::func:: to strong::outbus:: using Out.ar or Out.kr.
+The output behavior depends on the shape of the output specification and the signal.
+
+subsection::Allowed out specifications
+
+strong::out(x):: accepts:
+
+list::
+## Integer
+## Bus
+## Array of (Integer or Bus)
+::
+
+Empty arrays are invalid.
+
+subsection::Array mapping rules (no leakage)
+
+When the normalized bus index is an Array, NdM applies these rules to avoid multichannel expansion leakage:
+
+list::
+## If the signal is an Array and strong::signal.size == busIndex.size::,
+each channel is mapped explicitly:
+strong::Out.(busIndex[i], signal[i])::.
+## If the signal is mono (not an Array), NdM writes the same mono signal to each bus index
+by calling Out once per element (mono map). NdM does not duplicate the signal and send it as a multichannel array.
+::
+
+note::
+The mono-map rule prevents unintended writing to adjacent buses (e.g., bus 2 leakage when routing mono to [0, 1]).
+::
 
 method::bus
 Return the link::Classes/Bus:: assigned to strong::argName::.
@@ -193,7 +241,11 @@ subsection::Connecting modulators
 code::
 ~car = nd { |mod| SinOsc.ar(mod * 100 + 200, 0, 0.1) }.out([0, 1]).play;
 
+// out accepts Bus directly:
 ~mod = nd { SinOsc.ar(5) }.out(~car[\mod]).play;
+
+// Array[Bus] is also supported (normalized to bus indices):
+~mod = nd { SinOsc.ar(6) }.out([~car[\mod]]).play;
 
 NdMNameSpace.dumpStatus;
 

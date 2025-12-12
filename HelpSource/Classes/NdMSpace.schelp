@@ -239,7 +239,7 @@ a = NdMSpace.enter;
 // ** Basic node setup **
 
 ~osc = nd { SinOsc.ar(440, 0, 0.2) };	// define audio function for this node
-~osc.out([0,1]);	// set output bus (stereo: buses 0 and 1)
+~osc.out([0,1]);	// route output to buses 0 and 1 (Array mapping rules apply; see NdM out specification)
 ~osc.fade(1);		// set fade time (seconds) for play/stop/free
 ~osc.tag(\osc);		// add tag \osc to this node
 ~osc.play;			// start playback with fade-in
@@ -258,7 +258,7 @@ a = NdMSpace.enter;
 subsection::Inspecting and replacing a node
 
 code::
-// ** Inspect node properties (before free) **
+// ** Inspect node properties **
 
 ~osc.key;           // get the NdM key (symbol name)
 ~osc.out;           // get current output bus specification
@@ -268,7 +268,7 @@ code::
 
 // ** Replace the function (carrier waveform change) **
 
-~osc = nd { LFTri.ar(220, 0, 0.2) };   // assign a new function; key and buses are kept
+~osc = nd { LFTri.ar(100, 0, 0.2) };   // assign a new function; key and buses are kept
 
 // ** Fade time when switching functions **
 
@@ -278,12 +278,17 @@ code::
 // ** Debug-related flags **
 
 ~osc.dbg = 1;       // enable debug logging for this node
-~osc.poll = 1;      // enable polling of NdM's internal fade UGens (VarLag / EnvGen)
+~osc.poll = 1;      // enable polling for debug UGens inside this node
 ~osc.dbg = 0;       // disable debug logging
 ~osc.poll = 0;      // disable polling
 ::
 
 subsection::Connecting NdMs via argument buses
+
+note::
+If an output Array contains Bus objects, all Bus elements must share the same rate.
+Mixed audio/control bus rates inside a single out specification throw NdMError.
+::
 
 code::
 // ** Connect nodes: carrier and modulators **
