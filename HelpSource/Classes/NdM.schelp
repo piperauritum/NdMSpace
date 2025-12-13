@@ -101,6 +101,22 @@ subsection::Output routing (out / out_)
 NdM writes the return signal of strong::func:: to strong::outbus:: using Out.ar or Out.kr.
 The output behavior depends on the shape of the output specification and the signal.
 
+note::
+NdM argument buses are implemented as control buses and are read inside the running node
+using strong::In.kr::.
+On the SuperCollider server, control-bus writes (strong::Out.kr::) and reads
+(strong::In.kr::) occur in node execution order within each control block.
+
+When multiple nodes write to the same control bus, the value observed by a given node
+depends on whether those writers have already executed in the current block.
+As a result, a node cannot reliably read the final summed value of a shared control bus
+independent of node execution order.
+
+If deterministic results are required, ensure that writer nodes execute before reader
+nodes by controlling server node order, or use an audio-rate signal path instead of
+a control bus.
+::
+
 subsection::Allowed out specifications
 
 strong::out(x):: accepts:
