@@ -93,6 +93,18 @@ Fade out, clear the proxy, free argument buses, and unregister the NdM from the 
 The bus history strong::(argName → busIndex, rate):: remains stored in NdMNameSpace
 so that future NdM nodes with the same key reuse the same buses.
 
+subsection::Method aliases (live coding)
+
+For convenience during live coding, NdM provides short aliases for frequently used methods:
+
+list::
+## strong::.o(x):: → strong::.out(x)::
+## strong::.f(t):: → strong::.fade(t)::
+## strong::.t(sym):: → strong::.tag(sym)::
+## strong::.p:: → strong::.play::
+## strong::.s:: → strong::.stop::
+::
+
 method::fade
 Get or set the fade time in seconds used by play/stop/free and function switching.
 

@@ -428,6 +428,19 @@ NdMSpaceSpec : Object {
 		^this;
 	}
 
+	// aliases (for NdMSpaceSpec builder)
+	o { |outBusIn|
+		^this.out(outBusIn);
+	}
+
+	f { |fadeTimeIn|
+		^this.fade(fadeTimeIn);
+	}
+
+	p {
+		^this.play;
+	}
+
 	// ------------------------------------------------
 	// Tag configuration (deferred)
 	// ------------------------------------------------
@@ -445,6 +458,11 @@ NdMSpaceSpec : Object {
 			tagBuffer.remove(tagSymbol);
 		};
 		^this;
+	}
+
+	// aliases (for NdMSpaceSpec builder)
+	t { |tagSymbol|
+		^this.tag(tagSymbol);
 	}
 
 	// NdM 生成後に呼び出され、バッファされたタグを適用する

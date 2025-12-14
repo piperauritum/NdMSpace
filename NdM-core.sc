@@ -55,11 +55,6 @@ NdM : Object {
 	// Optional Bus used to expose fade envelope externally (may remain nil).
 	var fadeBus;
 
-	// var fadeStart;
-	// var fadeEnd;
-	// var fadeDur;
-	// var freeSeq;
-
 	// Crossfade duration used when switching functions (ndmGate based).
 	var <>switchDur;
 
@@ -212,14 +207,6 @@ NdM : Object {
 				busIndex = monitor1.recallBus(key, argName);
 			};
 
-			// If no reusable bus found, allocate a new one.
-			// if(busIndex.isNil) {
-			// 	if(monitorLocal.notNil) {
-			// 		busIndex = monitorLocal.lookupBusIndex(key, argName);
-			// 	};
-			// };
-
-
 			if(busIndex.notNil) {
 				bus = Bus.new(rate, busIndex, 1, server);
 			} {
@@ -228,11 +215,6 @@ NdM : Object {
 				} {
 					bus = Bus.control(server, 1);
 				};
-
-				// --- obsolete: legacy NdMMon bus table ---
-				// if(monitorLocal.notNil) {
-				// 	monitorLocal.storeBusIndex(key, argName, bus.index);
-				// };
 			};
 
 			argBuses[argName] = bus;
@@ -249,11 +231,6 @@ NdM : Object {
 
 		// Initialize fade-related fields.
 		fadeBus = nil;
-		// fadeStart = 0.0;
-		// fadeEnd = 0.0;
-		// fadeDur = 0.0;
-
-		// freeSeq = 0;
 
 		switchDur = 0.05;	// Default crossfade duration for function switching.
 
@@ -445,7 +422,7 @@ NdM : Object {
 						} {
 							if(elem.isKindOf(Integer)) {
 								idx = elem;
-								rateNow = \audio; // integer は audio out とみなす
+								rateNow = \audio; // Integer is treated as audio out.
 							} {
 								msg = "NdM: outbus array element must be Bus or Integer, got: "
 								++ elem.class.asString;
@@ -470,7 +447,7 @@ NdM : Object {
 					busIndex = idxArray;
 					busRate = rateFirst ? \audio;
 				} {
-					// Integer 等：audio out 扱い
+					// Integer is treated as audio out.
 					busIndex = outbusLocal;
 					busRate = \audio;
 				};
@@ -485,29 +462,6 @@ NdM : Object {
 		result = [busIndex, busRate];
 		^result;
 	}
-
-	// resolveOutBus { |outbusLocal|
-	// 	var busIndex;
-	// 	var busRate;
-	// 	var result;
-	//
-	// 	if(outbusLocal.isNil) {
-	// 		busIndex = 0;
-	// 		busRate = \audio;
-	// 	} {
-	// 		if(outbusLocal.isKindOf(Bus)) {
-	// 			busIndex = outbusLocal.index;
-	// 			busRate = outbusLocal.rate;
-	// 		} {
-	// 			// Integers/arrays imply audio-rate output.
-	// 			busIndex = outbusLocal;
-	// 			busRate = \audio;
-	// 		};
-	// 	};
-	//
-	// 	result = [busIndex, busRate];
-	// 	^result;
-	// }
 
 	// Ensure output signal rate matches target bus's rate (ar/kr).
 	checkRateMatch { |busRate, signalRate|
@@ -565,7 +519,7 @@ NdM : Object {
 				chanCount = signalLocal.size;
 
 				if(chanCount == indexCount) {
-					// ch 対応マッピング（既存）
+					// ch corresponding mapping (existing)
 					idx = 0;
 					while { idx < indexCount } {
 						sigChan = signalLocal[idx];
@@ -580,7 +534,7 @@ NdM : Object {
 						idx = idx + 1;
 					};
 				} {
-					// サイズ不一致は従来互換
+					// Size mismatch is compatible with previous versions.
 					this.debugPost(
 						"[NdM.writeSignalToBus] calling Out (array bus, mismatch): bus="
 						++ busIndexLocal.asString
@@ -588,7 +542,8 @@ NdM : Object {
 					outFunc.(busIndexLocal, signalLocal);
 				};
 			} {
-				// ★ mono signal: dup しない。各バスに mono を個別に書く（リーク防止）
+				// Do not duplicate mono signals.
+				// Write mono signals separately on each bus (to prevent leaks)
 				idx = 0;
 				while { idx < indexCount } {
 					this.debugPost(
@@ -609,14 +564,6 @@ NdM : Object {
 
 		signalIn
 	}
-
-	// writeSignalToBus { |signal, busIndex, busRate|
-	// 	if(busRate == \control) {
-	// 		Out.kr(busIndex, signal);
-	// 	} {
-	// 		Out.ar(busIndex, signal);
-	// 	};
-	// }
 
 	// Unified getter/setter interface for output bus routing.
 	out { |val|
@@ -654,17 +601,25 @@ NdM : Object {
 		};
 	}
 
-	/*	isPlaying {
-	var proxyLocal;
-	var flag;
+	// short aliases (live coding convenience)
 
-	proxyLocal = proxy;
-	if(proxyLocal.isNil) {
-	flag = false;
-	} {
-	flag = proxyLocal.isPlaying;
-	};
+	o { |outBusIn|
+		^this.out(outBusIn);
+	}
 
-	^flag;
-	}*/
+	f { |fadeTimeIn|
+		^this.fade(fadeTimeIn);
+	}
+
+	t { |tagSymbol|
+		^this.tag(tagSymbol);
+	}
+
+	p {
+		^this.play;
+	}
+
+	s {
+		^this.stop;
+	}
 }

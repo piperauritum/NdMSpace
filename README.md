@@ -184,6 +184,19 @@ a.reset;
 a.exit;
 ```
 
+## Alias style (optional, for live coding):
+
+```supercollider
+a = NdMSpace.enter;
+
+~osc = nd { |freq| SinOsc.ar(freq, 0, 0.1) }.o(0).p;
+~lfo = nd { SinOsc.ar(1).range(200, 1200) }.o(~osc[\freq]).p;
+
+a.freeAll;
+a.reset;
+a.exit;
+```
+
 ---
 
 # Basic Features
@@ -212,6 +225,8 @@ a.exit;
 ```supercollider
 ~a.free;
 ```
+
+Short aliases: `.o`=out, `.f`=fade, `.t`=tag, `.p`=play, `.s`=stop.
 
 ### Query the input bus:
 

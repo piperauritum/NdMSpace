@@ -248,11 +248,20 @@ a = NdMSpace.enter;
 
 ~osc = nd { SinOsc.ar(440, 0, 0.2) }.out([0,1]).fade(1).tag(\osc).play;
 
+// ** The same can be written with short aliases **
+
+~osc = nd { SinOsc.ar(440, 0, 0.2) }.o([0,1]).f(1).t(\osc).p;
+
 // ** Start / stop /  free the node **
 
 ~osc.play;          // resume playback with fade-in
 ~osc.stop;          // stop with fade-out (keep node for later reuse)
 ~osc.free;          // free the underlying NodeProxy / Synth and release resources
+::
+
+note::
+Aliases strong::o/f/t/p:: are available on the temporary builder returned by strong::nd { ... }::.
+Aliases strong::s:: are available on NdM instances.
 ::
 
 subsection::Inspecting and replacing a node
