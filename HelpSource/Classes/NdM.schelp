@@ -105,6 +105,22 @@ list::
 ## strong::.s:: → strong::.stop::
 ::
 
+subsection::Debug flags (dbg / poll)
+
+NdM provides instance-side debug controls:
+
+list::
+## strong::dbg:: enables or disables NdM-side debug logging for this node.
+## strong::poll:: enables or disables poll UGens inside this node (may rebuild the proxy graph).
+::
+
+note::
+NdMSpace also provides a space-wide strong::dbg:: method.
+strong::NdMSpace.dbg(1/0):: applies to all existing NdM nodes immediately and sets the default
+for future strong::nd { ... }:: conversions.
+Use NdMSpace.dbg when you want debug settings to persist across repeated redefinitions.
+::
+
 method::fade
 Get or set the fade time in seconds used by play/stop/free and function switching.
 

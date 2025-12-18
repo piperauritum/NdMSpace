@@ -54,17 +54,6 @@ NdMNameSpace : Object {
 		^monInst;
 	}
 
-	// *acquire {
-	// 	var monitor;
-	//
-	// 	monitor = monInst;
-	// 	if(monitor.isNil) {
-	// 		monitor = super.new.init;
-	// 		monInst = monitor;
-	// 	};
-	// 	^monitor;
-	// }
-
 	// instance
 	// ---------------------------------------------------------------------------
 	// Core API: return the current NdMNameSpace instance if it exists.
@@ -75,14 +64,6 @@ NdMNameSpace : Object {
 	*instance {
 		^monInst;
 	}
-
-	// *reset {
-	// 	// explicit reset: fully discard the previous singleton instance
-	// 	"NdMNameSpace: reset".postln;
-	// 	monInst = nil;            // drop old instance reference (hard reset)
-	// 	monInst = super.new.init; // create a fresh new monitor instance
-	// 	^monInst;
-	// }
 
 	*reset {
 		var oldInst;
@@ -105,7 +86,8 @@ NdMNameSpace : Object {
 				stateTable.keysValuesDo { |keySymbol, stateLocal|
 					var argsTableLocal2;
 
-					// stateLocal は \node/\args/\tags を持つ IdentityDictionary のはず
+					// stateLocal is expected to be an IdentityDictionary
+					// containing \node, \args, and \tags entries.
 					if(stateLocal.notNil) {
 						argsTableLocal2 = stateLocal[\args];
 
@@ -119,7 +101,7 @@ NdMNameSpace : Object {
 										rateSymbolLocal = \audio;
 									};
 
-									// NdM が予約していた bus をここで解放
+									// Free buses that were reserved by NdM at this point.
 									busLocal = Bus.new(rateSymbolLocal, busIndexLocal, 1, server);
 									busLocal.free;
 								};
@@ -130,15 +112,15 @@ NdMNameSpace : Object {
 			};
 		};
 
-		// ここでモニタを作り直す
+		// Recreate the monitor instance here.
 		monInst = nil;
 		monInst = super.new.init;
 		^monInst;
 	}
 
 	*release {
-		// フェーズ2の設計で参照カウントや cleanup 方針を決める。
-		// ここでは何もしない最小スケルトン。
+		// Reference counting and cleanup policy will be defined in the Phase 2 design.
+		// This is a minimal skeleton; no action is taken here.
 		^this;
 	}
 

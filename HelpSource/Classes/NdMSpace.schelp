@@ -168,6 +168,35 @@ method::fadeGap
 Get or set the class-level delay (in seconds) that NdMSpace waits after issuing fade-related operations such as strong::stopAll:: or strong::freeAll::.
 This gap allows fade envelopes to finish on the server before node cleanup, bus reuse, or internal resets occur.
 
+subsection::Debug flag (space-wide)
+
+method::dbg
+Get or set the current default debug flag for the active NdMSpace.
+
+Calling strong::dbg(1):: or strong::dbg(0):: updates two things:
+
+list::
+## The space-level default debug value used when converting strong::nd { ... }:: into an NdM instance.
+## The debug flag of all currently existing NdM instances in the space (applied immediately).
+::
+
+This is designed to prevent debug settings from being lost when a key is repeatedly redefined during live coding.
+
+argument::value
+An optional value to set the flag.
+
+list::
+## Number: strong::value > 0:: becomes 1, otherwise 0.
+## Boolean: strong::true:: becomes 1, otherwise 0.
+::
+
+If omitted, returns the currently stored default value (nil/0/1).
+
+note::
+NdM also has an instance-side strong::dbg:: flag.
+strong::NdMSpace.dbg:: controls the default and applies it to all existing nodes,
+while strong::NdM.dbg:: affects only that single node.
+::
 
 subsection::Lookup
 
@@ -226,6 +255,38 @@ Internal method.
 Store an NdM instance or value under a given key symbol inside this NdMSpace.
 Used by assignment and internal update routines.
 
+subsection::Known issues and timing-related artifacts
+
+In certain live-coding situations, you may notice brief amplitude or envelope fluctuations
+("audio wobble") when redefining nodes rapidly.
+
+This can occur when:
+
+list::
+## An NdM instance is redefined repeatedly in a short time span.
+## Function switching (apply) overlaps with fade-in / fade-out processing.
+## switchDur or fade times are very short.
+::
+
+This behavior is not a bug in the user API, but a known limitation related to
+asynchronous apply scheduling and server-side envelope timing.
+
+note::
+NdM is designed to prioritize safety and consistency over strict sample-accurate continuity
+during live redefinition.
+In rare edge cases, overlapping apply requests may result in audible transitions.
+::
+
+Workarounds and recommendations:
+
+list::
+## Avoid extremely short switchDur values when redefining nodes rapidly.
+## Insert a small delay between successive redefinitions if strict continuity is required.
+## Treat apply-based function switching as a musical gesture rather than a sample-accurate operation.
+::
+
+This issue is documented for transparency.
+No immediate fix is applied, but future versions may refine apply synchronization.
 
 EXAMPLES::
 
@@ -284,12 +345,18 @@ code::
 ~osc.switchDur;         // get current function-switch fade time
 ~osc.switchDur = 0.05;  // set crossfade time (seconds) when replacing the function
 
+// ** Space-wide debug default (recommended for live coding) **
+
+a.dbg(1);  // enable debug for all existing NdM nodes and for future nd { ... } conversions
+
 // ** Debug-related flags **
 
 ~osc.dbg = 1;       // enable debug logging for this node
 ~osc.poll = 1;      // enable polling for debug UGens inside this node
 ~osc.dbg = 0;       // disable debug logging
 ~osc.poll = 0;      // disable polling
+
+a.dbg(0);  // disable debug for all existing nodes and for future conversions
 ::
 
 subsection::Connecting NdMs via argument buses

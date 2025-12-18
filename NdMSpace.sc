@@ -8,6 +8,9 @@ NdMSpace : LazyEnvir {
 
 	var server;
 
+	// New: carry last requested dbg value (normalized to 0/1), or nil if unspecified.
+	var <>lastDbgValue;
+
 	// --------------------------------------------------------------------
 	// Frontend: global NdM control
 	// --------------------------------------------------------------------
@@ -211,6 +214,82 @@ NdMSpace : LazyEnvir {
 		^this;
 	}
 
+	// New: dbg carry API (NdMSpace-level)
+	//
+	// a = NdMSpace.enter;
+	// a.dbg(1);     // store lastDbgValue = 1
+	// a.dbg(0);     // store lastDbgValue = 0
+	// a.dbg;        // -> lastDbgValue (nil/0/1)
+	dbg { |value|
+		var norm;
+		var table;
+
+		// getter
+		if(value.isNil) {
+			^lastDbgValue;
+		};
+
+		// setter (normalize to 0/1)
+		if(value.isNumber) {
+			if(value > 0) {
+				norm = 1;
+			} {
+				norm = 0;
+			};
+		} {
+			if(value == true) {
+				norm = 1;
+			} {
+				norm = 0;
+			};
+		};
+
+		lastDbgValue = norm;
+
+		// Apply to existing NdM instances immediately (so T1 works).
+		table = NdM.instances;
+		if(table.notNil) {
+			table.values.do { |ndmInstance|
+				if(ndmInstance.notNil) {
+					ndmInstance.dbg(norm);
+				};
+			};
+		};
+
+		^this;
+	}
+
+	dbg_ { |value|
+		var norm;
+		var table;
+
+		if(value.isNumber) {
+			if(value > 0) {
+				norm = 1;
+			} {
+				norm = 0;
+			};
+		} {
+			if(value == true) {
+				norm = 1;
+			} {
+				norm = 0;
+			};
+		};
+
+		lastDbgValue = norm;
+
+		// Apply to existing NdM instances immediately.
+		table = NdM.instances;
+		if(table.notNil) {
+			table.values.do { |ndmInstance|
+				if(ndmInstance.notNil) {
+					ndmInstance.dbg(norm);
+				};
+			};
+		};
+	}
+
 	exit {
 		^NdMSpace.exit;
 	}
@@ -232,10 +311,10 @@ NdMSpace : LazyEnvir {
 			srv = Server.default;
 		};
 
-		// ここで instance メソッドを呼ぶ
+		// Then call the instance method
 		space.initForServer(srv);
 
-		// 旧 Environment の内容を「生の辞書」にコピー
+		// Copy the contents of the old Environment into a "raw dictionary"
 		oldEnv.keysValuesDo { |key, value|
 			space.envir.put(key, value);
 		};
@@ -272,6 +351,7 @@ NdMSpace : LazyEnvir {
 
 	initForServer { |srv|
 		server = srv;
+		lastDbgValue = nil;
 	}
 
 	put { |key, obj|
@@ -279,29 +359,36 @@ NdMSpace : LazyEnvir {
 		var oldVal;
 		var ndmObj;
 		var outBus;
-		// var oldIsPlaying;
+		var inheritDbg;
+		var norm;
 
 		oldVal = envir.at(key);
 
-		// 1) NdMSpaceSpec の場合 → NdM を生成
+		// 1) In the case of NdMSpaceSpec → Generate NdM
 		if(obj.isKindOf(NdMSpaceSpec)) {
+
 			specObj = obj;
 
-			// 既存値が NdM で、かつ再生していなければ free してから再生成する。
-			// （stopTag などで完全にミュートされた後の再定義ケース）
-			// if(oldVal.isKindOf(NdM)) {
-			// 	oldIsPlaying = oldVal.isPlaying;
-			// 	if(oldIsPlaying.not) {
-			// 		oldVal.free;
-			// 		oldVal = nil;
-			// 	};
-			// };
+			// (1) Apply lastDbgValue if spec does not explicitly define dbg.
+			if(specObj.dbgValue.isNil && lastDbgValue.notNil) {
+				specObj.dbg(lastDbgValue);
+			};
 
-			// outBus が明示されていればそれを優先
+			// (2) Existing fallback: inherit dbg from previous NdM (only if still unspecified).
+			inheritDbg = nil;
+			if(oldVal.isKindOf(NdM) && specObj.dbgValue.isNil) {
+				// NdM.dbg getter returns Boolean (canDebug).
+				inheritDbg = oldVal.dbg;
+				if(inheritDbg == true) {
+					specObj.dbg(1);
+				};
+			};
+
+			// If outBus is explicitly specified, prefer it.
 			if(specObj.outBus.notNil) {
 				outBus = specObj.outBus;
 			} {
-				// なければ既存 NdM の outbus、さらに無ければ 0
+				// Otherwise, inherit outbus from existing NdM, or fall back to 0.
 				if(oldVal.isKindOf(NdM)) {
 					outBus = oldVal.out;
 				} {
@@ -310,6 +397,33 @@ NdMSpace : LazyEnvir {
 			};
 
 			ndmObj = NdM(key, specObj.func, outBus);
+
+			if(specObj.dbgValue.notNil) {
+				ndmObj.dbg(specObj.dbgValue);
+
+				// If dbg was explicitly specified on spec, remember it as lastDbgValue.
+				if(specObj.dbgValue.isNumber) {
+					if(specObj.dbgValue > 0) {
+						norm = 1;
+					} {
+						norm = 0;
+					};
+				} {
+					if(specObj.dbgValue == true) {
+						norm = 1;
+					} {
+						norm = 0;
+					};
+				};
+				lastDbgValue = norm;
+
+			} {
+				if(oldVal.isKindOf(NdM)) {
+					if(oldVal.dbg) {
+						ndmObj.dbg(1);
+					};
+				};
+			};
 
 			if(specObj.fadeTime > 0) {
 				ndmObj.fade = specObj.fadeTime;
@@ -326,9 +440,9 @@ NdMSpace : LazyEnvir {
 			^ndmObj;
 		};
 
-		// 2) 素の Function は NdM にせず、そのまま Function として保存
+		// 2) A raw Function is not converted to NdM; store it as-is.
 		if(obj.isKindOf(Function)) {
-			// 既存値が NdM なら free しておく（音止め）
+			// If the previous value was an NdM, free it first (stop sound).
 			if(oldVal.isKindOf(NdM)) {
 				oldVal.free;
 			};
@@ -337,8 +451,8 @@ NdMSpace : LazyEnvir {
 			^obj;
 		};
 
-		// 3) その他（String 等）は、そのまま保存
-		//    既存値が NdM なら free だけしてから上書き
+		// 3) Other objects (e.g. String) are stored as-is.
+		//    If the previous value was an NdM, free it before overwriting.
 		if(oldVal.isKindOf(NdM)) {
 			oldVal.free;
 		};
@@ -393,6 +507,7 @@ NdMSpaceSpec : Object {
 	var <>fadeTime;
 	var <>autoPlay;
 	var <>tagBuffer;
+	var <>dbgValue;
 
 	// ------------------------------------------------
 	// Construction
@@ -465,13 +580,31 @@ NdMSpaceSpec : Object {
 		^this.tag(tagSymbol);
 	}
 
-	// NdM 生成後に呼び出され、バッファされたタグを適用する
+	// Called after NdM creation to apply buffered tags
 	applyTagsTo { |ndmInstance|
 		if(tagBuffer.notNil) {
 			tagBuffer.do { |tagItem|
 				ndmInstance.tag(tagItem);
 			};
 		};
+	}
+
+	dbg { |value|
+		var xr;
+
+		// getter
+		if(value.isNil) {
+			xr = dbgValue;
+		} {
+			dbgValue = value;
+			xr = this;
+		};
+
+		^xr;
+	}
+
+	dbg_ { |value|
+		dbgValue = value;
 	}
 }
 

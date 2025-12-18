@@ -19,10 +19,10 @@ NdMTag : Object {
         var nodes;
         var ndmInstance;
 
-        // NdMNameSpace 経由で、tag を持つ NdM インスタンス群を取得
+        // Retrieve all NdM instances that have the given tag via NdMNameSpace.
         nodes = this.nodesForTag(tagSymbol);
 
-        // それぞれに対して .play を呼ぶ（フェード時間は NdM 側の現在の設定を使用）
+        // Call .play on each instance (using the current fade settings of NdM).
         nodes.do { |ndmInstance|
             ndmInstance.play;
         };
@@ -86,7 +86,7 @@ NdMTag : Object {
 	//   ~osc.untag(\bg)   -> remove tag, return this
 	//   ~osc.tag          -> get current tags as Array
 	//
-	// 実体の保持・逆引きは NdMNameSpace に委譲する。
+	// Storage and reverse lookup are delegated to NdMNameSpace.
 
 	tag { |tagSymbol|
 		var monitor;

@@ -61,6 +61,16 @@ NdM : Object {
 	// Tracks whether initial fade setup has been completed for this instance.
 	var hasFadeInit;
 
+	// --- state machine (single-writer) ---
+	var wantPlay;
+	var wantFree;
+	var wantFunc;
+	var wantFade;
+	var wantSwitch;
+	var reqGen;
+	var running;
+	var appliedFunc;
+
 	// --- debug flags (instance-level) ---
 	var <>canDebug;
 	var <>canPoll;
@@ -231,10 +241,18 @@ NdM : Object {
 
 		// Initialize fade-related fields.
 		fadeBus = nil;
-
 		switchDur = 0.05;	// Default crossfade duration for function switching.
-
 		pollFreq = 10;		// Default polling frequency
+
+		// --- state machine init ---
+		wantPlay = false;
+		wantFree = false;
+		wantFunc = func;
+		wantFade = (fadetime ? 0.0);
+		wantSwitch = (switchDur ? 0.0);
+		reqGen = 0;
+		running = false;
+		appliedFunc = func;
 
 		^this;
 	}
