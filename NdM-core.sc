@@ -19,6 +19,8 @@ NdM : Object {
 	// Global fade gap used when performing VarLag-based fade-in transitions.
 	classvar <>fadeGap;
 
+	classvar <buildingKey;
+
 
 	// === Core instance state and argument/bus management fields. ===
 
@@ -150,6 +152,103 @@ NdM : Object {
 		};
 	}
 
+	*setBuildingKey { |keySymbol|
+		buildingKey = keySymbol;
+		^this;
+	}
+
+	*clearBuildingKey {
+		buildingKey = nil;
+		^this;
+	}
+
+	*inferRateUnified { |keySymbol, argSymbol|
+		var keyStr;
+		var argStr;
+		var rateSymbol;
+
+		keyStr = keySymbol.asString;
+		argStr = argSymbol.asString;
+
+		// Priority: arg suffix > key suffix > default audio
+		if(argStr.endsWith("_k")) {
+			rateSymbol = \control;
+		} {
+			if(argStr.endsWith("_a")) {
+				rateSymbol = \audio;
+			} {
+				if(keyStr.endsWith("_k")) {
+					rateSymbol = \control;
+				} {
+					if(keyStr.endsWith("_a")) {
+						rateSymbol = \audio;
+					} {
+						rateSymbol = \audio;
+					};
+				};
+			};
+		};
+
+		^rateSymbol;
+	}
+
+	// Returns: [busObject, rateSymbol]
+	*resolveArgBus { |keySymbol, argSymbol, serverIn|
+		var monitor;
+		var rateSymbol;
+		var busIndex;
+		var inferredRate;
+		var serverLocal;
+		var busObject;
+		var result;
+
+		serverLocal = serverIn;
+		if(serverLocal.isNil) {
+			serverLocal = Server.default;
+		};
+
+		monitor = NdMNameSpace.acquire;
+
+		rateSymbol = monitor.recallRate(keySymbol, argSymbol);
+		busIndex = monitor.recallBus(keySymbol, argSymbol);
+
+		// 1) Existing record wins (both must exist)
+		if(rateSymbol.notNil && busIndex.notNil) {
+			busObject = Bus.new(rateSymbol, busIndex, 1, serverLocal);
+			result = [busObject, rateSymbol];
+			^result;
+		};
+
+		// 3) Inconsistent (only one exists) => error
+		if(rateSymbol.notNil || busIndex.notNil) {
+			NdMError(
+				"[NdM] inconsistent arg bus record: key="
+				++ keySymbol.asString
+				++ " arg="
+				++ argSymbol.asString
+				++ " rate="
+				++ rateSymbol.asString
+				++ " busIndex="
+				++ busIndex.asString
+			).throw;
+		};
+
+		// 2) Infer and allocate, then remember BOTH (single path)
+		inferredRate = this.inferRateUnified(keySymbol, argSymbol);
+
+		if(inferredRate == \control) {
+			busObject = Bus.control(serverLocal, 1);
+		} {
+			busObject = Bus.audio(serverLocal, 1);
+		};
+
+		monitor.rememberBus(keySymbol, argSymbol, busObject.index);
+		monitor.rememberRate(keySymbol, argSymbol, inferredRate);
+
+		result = [busObject, inferredRate];
+		^result;
+	}
+
 	// Main initializer: setup key, function, argument metadata, and bus allocation.
 	init { |keySymbol, funcIn, outbusIn|
 		var server;
@@ -213,26 +312,15 @@ NdM : Object {
 
 			// Attempt to reuse a previously stored bus index.
 			busIndex = nil;
-			if(monitor1.notNil) {
-				busIndex = monitor1.recallBus(key, argName);
-			};
+			// Prepare argument-to-Bus mapping table.
+			argBuses = IdentityDictionary.new;
 
-			if(busIndex.notNil) {
-				bus = Bus.new(rate, busIndex, 1, server);
-			} {
-				if(rate == \audio) {
-					bus = Bus.audio(server, 1);
-				} {
-					bus = Bus.control(server, 1);
-				};
-			};
+			// Allocate/reuse buses for each argument name (unified rule).
+			argNames.do { |argName|
+				# bus, rate = NdM.resolveArgBus(key, argName, server);
 
-			argBuses[argName] = bus;
-
-			// Update namespace with latest bus/rate information.
-			if(monitor1.notNil) {
-				monitor1.rememberBus(key, argName, bus.index);
-				monitor1.rememberRate(key, argName, rate);
+				argBuses[argName] = bus;
+				argRates[argName] = rate;
 			};
 		};
 
@@ -356,11 +444,47 @@ NdM : Object {
 
 	// ~car[\mod] -> ~car.bus(\mod)
 	at { |argName|
-		var symbol;
+		var argSymbol;
 		var busLocal;
+		var res;
+		var rateSymbol;
+		var serverLocal;
 
-		symbol = argName.asSymbol;
-		busLocal = this.bus(symbol);
+		argSymbol = argName.asSymbol;
+
+		// self-reference guard: while building this key, ~key[\*] is forbidden
+		if((NdM.buildingKey.notNil) && (NdM.buildingKey == key)) {
+			NdMError(
+				"[NdM] self-reference detected while building key="
+				++ key.asString
+				++ " arg="
+				++ argSymbol.asString
+			).throw;
+		};
+
+		busLocal = this.bus(argSymbol);
+		if(busLocal.notNil) {
+			^busLocal;
+		};
+
+		serverLocal = this.getServer;
+
+		// unified resolution (recall both / inconsistent error / infer+remember both)
+		res = NdM.resolveArgBus(key, argSymbol, serverLocal);
+		busLocal = res[0];
+		rateSymbol = res[1];
+
+		// cache into instance maps (so subsequent calls are fast and rate-consistent)
+		if(argBuses.isNil) {
+			argBuses = IdentityDictionary.new;
+		};
+		if(argRates.isNil) {
+			argRates = IdentityDictionary.new;
+		};
+
+		argBuses[argSymbol] = busLocal;
+		argRates[argSymbol] = rateSymbol;
+
 		^busLocal;
 	}
 

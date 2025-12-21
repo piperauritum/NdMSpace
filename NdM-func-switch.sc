@@ -79,50 +79,36 @@
 			monitorLocal = NdMNameSpace.acquire;
 			this.debugPost("[NdM setFunc] NdMNameSpace.acquire -> " ++ monitorLocal.asString);
 
-			// --- (1) Allocate or reuse buses for each new argument name. ---
+			// --- (1) Allocate or reuse buses for each new argument name (unified rule). ---
 			newArgNames.do { |item|
+				var res;
+
 				argItem = item;
 				argNameLocal = argItem;
 
-				rateLocal = newArgRates[argNameLocal] ? \audio;
 				busLocal = argBuses[argNameLocal];
 
+				// If this NdM instance already has a bus, keep it.
+				// Otherwise resolve via the unified resolver (record wins / inconsistent error / infer+remember both).
 				if(busLocal.isNil) {
-					busIndexLocal = nil;
-					if(monitorLocal.notNil) {
-						busIndexLocal = monitorLocal.recallBus(key, argNameLocal);
-					};
-
-					this.debugPost("[NdM setFunc] arg: " ++ argNameLocal.asString
-						++ "  rate: " ++ rateLocal.asString
-						++ "  recalledIndex: " ++ busIndexLocal.asString);
-
-					if(busIndexLocal.notNil) {
-						busLocal = Bus.new(rateLocal, busIndexLocal, 1, serverLocal);
-						this.debugPost("[NdM setFunc] reuse Bus index: " ++ busIndexLocal.asString
-							++ "  class: " ++ busLocal.class.asString);
-					} {
-						if(rateLocal == \audio) {
-							busLocal = Bus.audio(serverLocal, 1);
-						} {
-							busLocal = Bus.control(serverLocal, 1);
-						};
-						this.debugPost("[NdM setFunc] new Bus allocated  index: "
-							++ busLocal.index.asString
-							++ "  rate: " ++ rateLocal.asString);
-					};
+					res = NdM.resolveArgBus(key, argNameLocal, serverLocal);
+					busLocal = res[0];
+					rateLocal = res[1];
 
 					argBuses[argNameLocal] = busLocal;
-				} {
-					this.debugPost("[NdM setFunc] reuse existing Bus for arg: "
-						++ argNameLocal.asString
+					argRates[argNameLocal] = rateLocal;
+
+					this.debugPost("[NdM setFunc] arg resolved: " ++ argNameLocal.asString
 						++ "  index: " ++ busLocal.index.asString
 						++ "  rate: " ++ rateLocal.asString);
-				};
+				} {
+					// Keep existing mapping; ensure rate table is populated.
+					rateLocal = argRates[argNameLocal] ? (newArgRates[argNameLocal] ? \audio);
+					argRates[argNameLocal] = rateLocal;
 
-				if(monitorLocal.notNil) {
-					monitorLocal.rememberBus(key, argNameLocal, argBuses[argNameLocal].index);
-					monitorLocal.rememberRate(key, argNameLocal, rateLocal);
+					this.debugPost("[NdM setFunc] arg reuse existing bus: " ++ argNameLocal.asString
+						++ "  index: " ++ busLocal.index.asString
+						++ "  rate: " ++ rateLocal.asString);
 				};
 			};
 

@@ -255,7 +255,9 @@ Internal method.
 Store an NdM instance or value under a given key symbol inside this NdMSpace.
 Used by assignment and internal update routines.
 
-subsection::Known issues and timing-related artifacts
+
+
+section::Known issues and timing-related artifacts
 
 In certain live-coding situations, you may notice brief amplitude or envelope fluctuations
 ("audio wobble") when redefining nodes rapidly.
@@ -287,6 +289,136 @@ list::
 
 This issue is documented for transparency.
 No immediate fix is applied, but future versions may refine apply synchronization.
+
+
+
+section::Returning Bus objects from nd functions
+
+In NdMSpace, the expression strong::~node[arg]:: returns a Bus object that represents
+the argument bus allocated for that node's argument.
+
+This Bus is intended to be used as a routing destination (e.g. out bus for modulators),
+not as a UGen signal value inside a SynthDef graph.
+
+If an nd function returns a Bus object as its signal output, it may later trigger
+SuperCollider errors such as "Message '*' not understood" when the system applies
+gain envelopes or other arithmetic operations.
+
+If you intend to read audio/control from a bus inside the UGen graph, explicitly use
+In.ar(busIndex) or InFeedback.ar(busIndex) (and choose the correct rate and channel count).
+
+note::
+NdM does not guarantee type validation of arbitrary return values from user functions.
+Returning a Bus is allowed by the language but is not meaningful as a signal.
+::
+
+
+
+section::Lazy-bus notation (pre-allocating argument buses)
+
+In NdMSpace, accessing an argument bus using the syntax
+code::
+~node[argName]
+::
+returns the Bus associated with that argument.
+
+When this access occurs before the corresponding NdM is defined,
+NdMSpace automatically creates a silent placeholder NdM and
+allocates the required argument bus on demand.
+This behavior is available only inside an active NdMSpace.
+
+This allows argument buses to be reserved *before* an
+code::
+nd { ... }
+::
+definition exists.
+This usage pattern is referred to as the strong::lazy-bus notation::.
+
+note::
+The stability of the Bus in lazy-bus notation is guaranteed by NdM's
+persistent argument-bus history.
+Argument buses are not tied to the lifetime of a specific Synth or
+NodeProxy instance, but are instead associated with a pair of
+strong::(node key, argument name):: and recorded in NdMNameSpace.
+
+When code::~node[argName]:: is evaluated, NdMNameSpace either recalls an
+existing bus index for that key/argument pair or allocates a new one and
+stores it immediately.
+Later definitions or redefinitions of the same node key reuse the stored
+bus information, ensuring that the routing destination remains stable
+even if the NdM instance itself is recreated.
+
+As a result, argument buses survive live redefinition, deferred node
+creation, and function switching, allowing node graphs to be assembled
+incrementally without breaking existing connections.
+::
+
+subsection::Motivation
+
+Lazy-bus notation makes it possible to write node connections
+from either direction:
+
+list::
+## Define modulators before carriers
+## Reserve routing destinations before the actual sound function exists
+## Keep argument buses stable across live redefinitions
+::
+
+This is especially useful in live coding and incremental patch construction.
+
+subsection::Example: defining a modulator before its carrier
+
+code::
+a = NdMSpace.enter;
+
+~mod = nd { SinOsc.ar(5).range(100, 400) }.out(~car[\frq]).play;
+
+// The carrier (~car) is not defined yet.
+// Accessing ~car[\frq] here allocates and returns the argument Bus lazily.
+// A silent placeholder NdM for ~car is created at this point.
+
+~car = nd { |frq| SinOsc.ar(frq, 0, 0.1) }.out([0, 1]).play;
+
+// The carrier is defined after the modulator.
+// The argument \frq automatically reuses the same Bus that was
+// previously allocated by ~car[\frq].
+
+~osc[\frq];       // Audio bus
+~osc[\frq_k];     // Control bus
+~osc_k[\frq];     // Control bus
+~osc_k[\frq_a];   // Audio bus
+~osc_a[\frq_k];   // Control bus
+::
+
+subsection::Behavior notes
+
+list::
+## code::~node[argName]:: returns a Bus object, not a UGen signal.
+   It is intended for routing destinations (for example, as an out bus).
+   If you want to read from a bus inside a SynthDef, use
+   code::In.ar::, code::InFeedback.ar::, or code::In.kr:: explicitly.
+
+## When the node key does not yet exist, NdMSpace creates
+   a silent placeholder NdM associated with that key.
+   When the node is later defined using
+   code::~node = nd { ... }::,
+   the same key and argument-bus history are reused.
+
+## This automatic placeholder creation occurs only inside NdMSpace.
+   Outside of NdMSpace, accessing an undefined environment variable
+   behaves normally and does not allocate buses.
+::
+
+subsection::Recommended usage
+
+Reserve argument buses only after entering NdMSpace
+using code::NdMSpace.enter::.
+Then define or redefine nodes freely.
+This enables building node chains both from upstream
+(modulators) and downstream (carriers) sides while keeping
+bus routing stable.
+
+
 
 EXAMPLES::
 
@@ -369,9 +501,15 @@ Mixed audio/control bus rates inside a single out specification throw NdMError.
 code::
 // ** Connect nodes: carrier and modulators **
 
-~car = nd { |mod| SinOsc.ar(mod * 200 + 200, 0, 0.2) }.out([0,1]).fade(2).tag(\fm);
+// See 'Lazy-bus notation'
 ~mod0 = nd { SinOsc.ar(10).range(0, 1) }.out(~car[\mod]).fade(2).tag(\fm);
-~mod1 = nd { LFNoise0.ar(1) }.out(~car[\mod]).fade(2).tag(\fm);	// Add another modulation signal to same bus
+
+// Add another modulation signal to same bus
+~mod1 = nd { LFNoise0.ar(1) }.out(~car[\mod]).fade(2).tag(\fm);
+
+// The carrier
+~car = nd { |mod| SinOsc.ar(mod * 200 + 200, 0, 0.2) }.out([0,1]).fade(2).tag(\fm);
+
 
 // ** Obtain argument buses **
 

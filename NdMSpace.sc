@@ -461,7 +461,20 @@ NdMSpace : LazyEnvir {
 		^obj;
 	}
 
+	at { |key|
+		var obj;
+		var ndmObj;
 
+		obj = envir.at(key);
+
+		// If missing, auto-create a placeholder NdM (NdMSpace-only feature).
+		if(obj.isNil) {
+			ndmObj = this.makeProxy(key);
+			^ndmObj;
+		};
+
+		^obj;
+	}
 
 	makeProxy { |key|
 		var ndmObj;
@@ -613,6 +626,22 @@ NdMSpaceSpec : Object {
 
 + Function {
 	nd {
-		^NdMSpaceSpec.fromFunction(this);
+		var xr;
+		var space;
+		var envOk;
+		var msg;
+
+		space = NdMSpace.current;
+		envOk = currentEnvironment.isKindOf(NdMSpace);
+
+		if(space.isNil || (envOk.not)) {
+			msg = "[NdMSpace] nd{} is only available inside NdMSpace.enter/exit scope.";
+			Error(msg).throw;
+			xr = nil;
+		} {
+			xr = NdMSpaceSpec.fromFunction(this);
+		};
+
+		^xr;
 	}
 }

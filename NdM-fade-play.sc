@@ -64,6 +64,24 @@
 			values = this.readArgValues(busesLocal, argNamesLocal, argRatesLocal);
 			signal = funcLocal.valueArray(values);
 
+			// Guard: returning Bus (language object) is invalid for UGen graphs.
+			// Convert the eventual "Bus * UGen" DoesNotUnderstandError into NdMError.
+			if(signal.isKindOf(Bus)) {
+				("[NdMWarn] WARN: [NdM] signal function returned a Bus. key=" ++ key
+					++ "  This may cause a DoesNotUnderstand error later (e.g. Bus * UGen). "
+					++ "Use In.ar(busIndex) / InFeedback.ar(busIndex) to read from a bus."
+				).postln;
+			};
+
+			if(signal.isKindOf(Collection)) {
+				if(signal.any { |v| v.isKindOf(Bus) }) {
+					NdMError.new(
+						"[NdM] invalid signal return (contains Bus). key=" ++ key
+						++ "  hint: use In.ar(busIndex) / InFeedback.ar(busIndex) to read from a bus."
+					).throw;
+				};
+			};
+
 			if(signal.notNil) {
 				// Determine output bus and its rate.
 				outInfo = this.resolveOutBus(outbusLocal);
@@ -127,8 +145,9 @@
 		var switchLocal;
 
 		if(proxy.isNil) {
-			this.debugPost("[NdM.play] ignored: proxy is nil (already freed?) key=" ++ key.asString);
-			^this;
+			// Recreate NodeProxy so that a previously-freed NdM can be played again.
+			proxy = Ndef(key);
+			this.debugPost("[NdM.play] proxy recreated (was nil) key=" ++ key.asString);
 		};
 
 		fadeDur = fadetime;
@@ -200,21 +219,106 @@
 		^this;
 	}
 
-
 	applyKick {
 		var doStart;
 
 		doStart = running.not;
+
+		this.debugPost(
+			"[APPLY-KICK] key=" ++ key.asString
+			++ " running=" ++ running.asString
+			++ " reqGen=" ++ reqGen.asString
+			++ " doStart=" ++ doStart.asString
+		);
+
 		if(doStart) {
 			running = true;
+
+			this.debugPost(
+				"[APPLY-KICK] start fork key=" ++ key.asString
+				++ " running=" ++ running.asString
+				++ " reqGen=" ++ reqGen.asString
+			);
+
 			fork {
-				this.apply;
+				{
+					this.debugPost("[APPLY-FORK] enter key=" ++ key.asString
+						++ " reqGen=" ++ reqGen.asString);
+
+					this.apply;
+
+					this.debugPost("[APPLY-FORK] exit key=" ++ key.asString
+						++ " reqGen=" ++ reqGen.asString);
+				}.protect { |err|
+					if(err.notNil) {
+						this.debugPost("[APPLY-FORK] cleanup after ERROR key=" ++ key.asString
+							++ " err=" ++ err.asString);
+					} {
+						this.debugPost("[APPLY-FORK] cleanup (no error) key=" ++ key.asString
+							++ " reqGen=" ++ reqGen.asString);
+					};
+
+					// Always clear: apply may crash or may forget to flip it back.
+					running = false;
+
+					// Safe to clear even if not set; prevents leakage across failures.
+					NdM.clearBuildingKey;
+				};
 			};
 		} {
-			this.debugPost("[APPLY] already running");
+			this.debugPost(
+				"[APPLY] already running key=" ++ key.asString
+				++ " running=" ++ running.asString
+				++ " reqGen=" ++ reqGen.asString
+			);
 		};
 
 		^this;
+	}
+
+	applySnapshot {
+		var xr;
+		var proxyLocal;
+		var fadeLocal;
+		var switchLocal;
+		var wantPlayLocal;
+		var wantFreeLocal;
+		var funcLocal;
+		var funcChanged;
+
+		xr = IdentityDictionary.new;
+
+		proxyLocal = proxy;
+
+		wantPlayLocal = if(wantPlay.isNil) { false } { wantPlay };
+		wantFreeLocal = if(wantFree.isNil) { false } { wantFree };
+
+		fadeLocal = if(wantFade.isNil) { 0.0 } { wantFade };
+		if(fadeLocal < 0.0) {
+			fadeLocal = 0.0;
+		};
+
+		switchLocal = if(wantSwitch.isNil) { 0.0 } { wantSwitch };
+		if(switchLocal < 0.0) {
+			switchLocal = 0.0;
+		};
+
+		funcLocal = if(wantFunc.isNil) { func } { wantFunc };
+
+		funcChanged = false;
+		if(proxyLocal.notNil) {
+			funcChanged = proxyLocal.source.isNil || (appliedFunc != funcLocal);
+		};
+
+		xr.put(\proxy, proxyLocal);
+		xr.put(\wantPlay, wantPlayLocal);
+		xr.put(\wantFree, wantFreeLocal);
+		xr.put(\fade, fadeLocal);
+		xr.put(\switchDur, switchLocal);
+		xr.put(\func, funcLocal);
+		xr.put(\funcChanged, funcChanged);
+
+		^xr;
 	}
 
 	apply {
@@ -229,12 +333,13 @@
 		var funcChanged;
 		var proxyFunc;
 		var monitor1;
+		var snap;
 
 		// preemptable-wait temps (must be declared at block head)
-		var remain;
-		var step;
-		var remain2;
-		var step2;
+		// removed: remain/step/remain2/step2 (handled by applyWaitGen)
+
+		// formerly mid-block var in old apply
+		var srv;
 
 		doLoop = true;
 
@@ -248,197 +353,49 @@
 				running = false;
 				doLoop = false;
 			} {
-				wantPlayLocal = wantPlay ? false;
-				wantFreeLocal = wantFree ? false;
+				snap = this.applySnapshot;
 
-				fadeLocal = wantFade ? 0.0;
-				if(fadeLocal < 0.0) {
-					fadeLocal = 0.0;
-				};
-
-				switchLocal = wantSwitch ? 0.0;
-				if(switchLocal < 0.0) {
-					switchLocal = 0.0;
-				};
-
-				funcLocal = wantFunc ? func;
-				funcChanged = proxyLocal.source.isNil || (appliedFunc != funcLocal);
-
-				this.debugPost(
-					"[APPLY] start gen=" ++ genStart.asString
-					++ " wantPlay=" ++ wantPlayLocal.asString
-					++ " wantFree=" ++ wantFreeLocal.asString
-					++ " fade=" ++ fadeLocal.asString
-					++ " sw=" ++ switchLocal.asString
-					++ " funcChanged=" ++ funcChanged.asString
-				);
-
-				// 0) Free request has priority
-				if(wantFreeLocal && (wantPlayLocal.not)) {
-
-					// fade-out by VarLag if requested
-					if(reqGen == genStart) {
-						proxyLocal.set(\ndmFade, fadeLocal, \switchDur, switchLocal, \ndmGate, 1);
-						proxyLocal.set(\ndmAmp, 0.0);
-					};
-
-					// Preemptable wait: check generation during fade-out.
-					if(fadeLocal > 0.0) {
-						remain = fadeLocal;
-						step = 0.05;
-
-						while { (remain > 0.0) && (reqGen == genStart) } {
-							if(remain < step) {
-								remain.wait;
-								remain = 0.0;
-							} {
-								step.wait;
-								remain = remain - step;
-							};
-						};
-					} {
-						if(switchLocal > 0.0) {
-							if(reqGen == genStart) {
-								proxyLocal.set(\ndmGate, 0, \switchDur, switchLocal);
-							};
-
-							remain2 = switchLocal;
-							step2 = 0.05;
-
-							while { (remain2 > 0.0) && (reqGen == genStart) } {
-								if(remain2 < step2) {
-									remain2.wait;
-									remain2 = 0.0;
-								} {
-									step2.wait;
-									remain2 = remain2 - step2;
-								};
-							};
-						};
-					};
-
-					if(reqGen == genStart) {
-						if(proxy.notNil) {
-							proxy.clear;
-							proxy = nil;
-						};
-
-						if(argBuses.notNil) {
-							argBuses = nil;
-						};
-
-						monitor1 = NdMNameSpace.instance;
-						if(monitor1.notNil) {
-							monitor1.unregister(key, this);
-						};
-
-						if(key.notNil) {
-							instances.removeAt(key);
-						};
-
-						wantFree = false;
-						wantPlay = false;
-						appliedFunc = nil;
-
-						doLoop = false;
-						running = false;
-						this.debugPost("[APPLY] freed gen=" ++ genStart.asString);
-					} {
-						this.debugPost("[APPLY] abort free gen=" ++ genStart.asString
-							++ " current=" ++ reqGen.asString);
-					};
-
+				proxyLocal = snap.at(\proxy);
+				if(proxyLocal.isNil) {
+					this.debugPost("[APPLY] proxy is nil");
+					running = false;
+					doLoop = false;
 				} {
+					wantPlayLocal = snap.at(\wantPlay);
+					wantFreeLocal = snap.at(\wantFree);
+					fadeLocal = snap.at(\fade);
+					switchLocal = snap.at(\switchDur);
+					funcLocal = snap.at(\func);
+					funcChanged = snap.at(\funcChanged);
 
-					// 1) Function switch (gate down -> swap source -> gate up)
+					this.debugPost(
+						"[APPLY] start gen=" ++ genStart.asString
+						++ " wantPlay=" ++ wantPlayLocal.asString
+						++ " wantFree=" ++ wantFreeLocal.asString
+						++ " fade=" ++ fadeLocal.asString
+						++ " sw=" ++ switchLocal.asString
+						++ " funcChanged=" ++ funcChanged.asString
+					);
+				};
+
+				// A) free (highest priority)
+				if(wantFreeLocal && (wantPlayLocal.not)) {
+					this.applyHandleFree(
+						genStart,
+						proxyLocal,
+						fadeLocal,
+						switchLocal
+					);
+				} {
+					// B) function switch (gate down -> swap -> gate up)
 					if(funcChanged) {
-						if((switchLocal > 0.0) && proxyLocal.isPlaying && proxyLocal.source.notNil) {
-
-							proxyLocal.set(\switchDur, switchLocal, \ndmGate, 0);
-							switchLocal.wait;
-
-							if(reqGen != genStart) {
-								this.debugPost("[APPLY] abort after gateDown gen=" ++ genStart.asString
-									++ " current=" ++ reqGen.asString);
-							} {
-								proxyFunc = this.makeProxyFunc;
-
-								// Ensure amp is 0 BEFORE swapping source (avoid NodeProxy control carry-over race).
-								proxyLocal.set(
-									\ndmFade, fadeLocal,
-									\switchDur, switchLocal,
-									\ndmGate, 1,
-									\ndmAmp, 0.0
-								);
-
-								proxyLocal.source = proxyFunc;
-								proxyLocal.set(\switchDur, switchLocal, \ndmGate, 1);
-								appliedFunc = funcLocal;
-							};
-
-						} {
-							proxyFunc = this.makeProxyFunc;
-
-							// Ensure amp is 0 BEFORE swapping source (avoid NodeProxy control carry-over race).
-							proxyLocal.set(
-								\ndmFade, fadeLocal,
-								\switchDur, switchLocal,
-								\ndmGate, 1,
-								\ndmAmp, 0.0
-							);
-
-							proxyLocal.source = proxyFunc;
-							proxyLocal.set(\switchDur, switchLocal, \ndmGate, 1);
-							appliedFunc = funcLocal;
-						};
+						this.applyHandleFuncSwitch(genStart, proxyLocal, fadeLocal, switchLocal, funcLocal);
 					};
 
-					// 2) Play/Stop apply (amp via VarLag in graph)
-					if(reqGen == genStart) {
+					// C) play/stop
+					this.applyHandlePlayStop(genStart, proxyLocal, fadeLocal, switchLocal, funcChanged, srv);
 
-						if(wantPlayLocal) {
-							proxyLocal.play;
-
-							// Always push fade first (VarLag timebase).
-							proxyLocal.set(\ndmFade, fadeLocal, \switchDur, switchLocal, \ndmGate, 1);
-
-							// Critical: when funcChanged, force amp init to 0 then ramp to 1.
-							if(funcChanged && (fadeLocal > 0.0)) {
-								var srv;
-
-								proxyLocal.set(\ndmAmp, 0.0);
-
-								// Sync insurance: ensure the "amp=0" message is applied before we wait and ramp up.
-								srv = this.getServer;
-								if(srv.notNil) {
-									try {
-										srv.sync;
-									} {
-										// ignore (do not spam post window)
-									};
-								};
-
-								NdM.fadeGap.wait;
-
-								if(reqGen == genStart) {
-									proxyLocal.set(\ndmAmp, 1.0);
-									this.debugPost("[APPLY] ampUp(init) gen=" ++ genStart.asString);
-								} {
-									this.debugPost("[APPLY] abort before ampUp(init) gen=" ++ genStart.asString
-										++ " current=" ++ reqGen.asString);
-								};
-							} {
-								proxyLocal.set(\ndmAmp, 1.0);
-								this.debugPost("[APPLY] ampUp gen=" ++ genStart.asString);
-							};
-
-						} {
-							proxyLocal.set(\ndmFade, fadeLocal, \ndmAmp, 0.0, \switchDur, switchLocal, \ndmGate, 1);
-							this.debugPost("[APPLY] ampDown gen=" ++ genStart.asString);
-						};
-					};
-
-					// 3) Generation gate
+					// generation gate
 					if(reqGen != genStart) {
 						// rerun latest
 					} {
@@ -450,6 +407,180 @@
 						this.debugPost("[APPLY] done gen=" ++ genStart.asString);
 					};
 				};
+			};
+		};
+
+		^this;
+	}
+
+	applyWaitGen { |genStart, dur, step|
+		var remain;
+		var stepLocal;
+
+		remain = dur ? 0.0;
+		if(remain < 0.0) {
+			remain = 0.0;
+		};
+
+		stepLocal = step ? 0.05;
+		if(stepLocal <= 0.0) {
+			stepLocal = 0.05;
+		};
+
+		while { (remain > 0.0) && (reqGen == genStart) } {
+			if(remain < stepLocal) {
+				remain.wait;
+				remain = 0.0;
+			} {
+				stepLocal.wait;
+				remain = remain - stepLocal;
+			};
+		};
+
+		^this;
+	}
+
+	applyHandleFree { |genStart, proxyLocal, fadeLocal, switchLocal|
+		var monitor1;
+
+		// fade-out by VarLag if requested
+		if(reqGen == genStart) {
+			proxyLocal.set(\ndmFade, fadeLocal, \switchDur, switchLocal, \ndmGate, 1);
+			proxyLocal.set(\ndmAmp, 0.0);
+		};
+
+		// Preemptable wait: check generation during fade-out.
+		if(fadeLocal > 0.0) {
+			this.applyWaitGen(genStart, fadeLocal, 0.05);
+		} {
+			if(switchLocal > 0.0) {
+				if(reqGen == genStart) {
+					proxyLocal.set(\ndmGate, 0, \switchDur, switchLocal);
+				};
+				this.applyWaitGen(genStart, switchLocal, 0.05);
+			};
+		};
+
+		if(reqGen == genStart) {
+			if(proxy.notNil) {
+				proxy.clear;
+				proxy = nil;
+			};
+
+			if(argBuses.notNil) {
+				argBuses = nil;
+			};
+
+			monitor1 = NdMNameSpace.instance;
+			if(monitor1.notNil) {
+				monitor1.unregister(key, this);
+			};
+
+			if(key.notNil) {
+				instances.removeAt(key);
+			};
+
+			wantFree = false;
+			wantPlay = false;
+			appliedFunc = nil;
+
+			running = false;
+			this.debugPost("[APPLY] freed gen=" ++ genStart.asString);
+		} {
+			this.debugPost("[APPLY] abort free gen=" ++ genStart.asString
+				++ " current=" ++ reqGen.asString);
+		};
+
+		^this;
+	}
+
+	applyHandleFuncSwitch { |genStart, proxyLocal, fadeLocal, switchLocal, funcLocal|
+		var proxyFunc;
+
+		if((switchLocal > 0.0) && proxyLocal.isPlaying && proxyLocal.source.notNil) {
+
+			proxyLocal.set(\switchDur, switchLocal, \ndmGate, 0);
+			switchLocal.wait;
+
+			if(reqGen != genStart) {
+				this.debugPost("[APPLY] abort after gateDown gen=" ++ genStart.asString
+					++ " current=" ++ reqGen.asString);
+			} {
+				proxyFunc = this.makeProxyFunc;
+
+				// Ensure amp is 0 BEFORE swapping source
+				proxyLocal.set(
+					\ndmFade, fadeLocal,
+					\switchDur, switchLocal,
+					\ndmGate, 1,
+					\ndmAmp, 0.0
+				);
+
+				proxyLocal.source = proxyFunc;
+				proxyLocal.set(\switchDur, switchLocal, \ndmGate, 1);
+				appliedFunc = funcLocal;
+			};
+
+		} {
+			proxyFunc = this.makeProxyFunc;
+
+			proxyLocal.set(
+				\ndmFade, fadeLocal,
+				\switchDur, switchLocal,
+				\ndmGate, 1,
+				\ndmAmp, 0.0
+			);
+
+			proxyLocal.source = proxyFunc;
+			proxyLocal.set(\switchDur, switchLocal, \ndmGate, 1);
+			appliedFunc = funcLocal;
+		};
+
+		^this;
+	}
+
+	applyHandlePlayStop { |genStart, proxyLocal, fadeLocal, switchLocal, funcChanged, srv|
+		if(reqGen == genStart) {
+
+			if((wantPlay ? false)) {
+				proxyLocal.play;
+
+				// Always push fade first (VarLag timebase).
+				proxyLocal.set(\ndmFade, fadeLocal, \switchDur, switchLocal, \ndmGate, 1);
+
+				// Critical: when funcChanged, force amp init to 0 then ramp to 1.
+				if(funcChanged && (fadeLocal > 0.0)) {
+
+					proxyLocal.set(\ndmAmp, 0.0);
+
+					// Sync insurance
+					srv = this.getServer;
+					if(srv.notNil) {
+						try {
+							srv.sync;
+						} {
+							// ignore
+						};
+					};
+
+					NdM.fadeGap.wait;
+
+					if(reqGen == genStart) {
+						proxyLocal.set(\ndmAmp, 1.0);
+						this.debugPost("[APPLY] ampUp(init) gen=" ++ genStart.asString);
+					} {
+						this.debugPost("[APPLY] abort before ampUp(init) gen=" ++ genStart.asString
+							++ " current=" ++ reqGen.asString);
+					};
+
+				} {
+					proxyLocal.set(\ndmAmp, 1.0);
+					this.debugPost("[APPLY] ampUp gen=" ++ genStart.asString);
+				};
+
+			} {
+				proxyLocal.set(\ndmFade, fadeLocal, \ndmAmp, 0.0, \switchDur, switchLocal, \ndmGate, 1);
+				this.debugPost("[APPLY] ampDown gen=" ++ genStart.asString);
 			};
 		};
 
