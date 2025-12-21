@@ -285,24 +285,31 @@ NdMSpace.dump;
 # Live-Coding Example: Patch Stability
 
 ```supercollider
+// 0. Enter NdMSpace
 a = NdMSpace.enter;
 
-// 1. Start main voice
-~main = nd { |mod| SinOsc.ar(mod * 300 + 400) * 0.2 }.out(0).play;
+// 1. Place the modulator
+~mod0 = nd { LFNoise1.ar(2).range(0, 1) }.f(5).o(~osc[\mod]).t(\mod);
 
-// 2. Add modulation
-~mod = nd { LFNoise2.ar(1).range(0.1, 3.0) }.out(~main[\mod]).play;
+// 2. Add another modulator
+~mod1 = nd { LFPulse.ar(10) }.f(5).o(~osc[\mod]).t(\mod);
 
-// 3. Add another modulator
-~mod1 = nd { LFPulse.ar(10) }.out(~main[\mod]).play;
+// 3. Start main voice
+~osc = nd { |mod| SinOsc.ar(mod * 500 + 500) * 0.2 }.f(5).o([0, 1]).p;
 
-// 4. Redefine main voice — modulation continues
-~main = nd { |mod| LFTri.ar(mod * 500 + 200) * 0.2 };
+// 4. Start modulators
+a.playTag(\mod);
 
-// 5. Replace modulator — bus index stays the same
-~mod1 = nd { SinOsc.ar(8, 0, 0.1) }.out(~main[\mod]);
+// 5. Redefine main voice — modulation continues
+~osc = nd { |mod| LFTri.ar(mod * 1000 + 1000) * 0.2 };
 
-// Cleanup
+// 6. Replace a modulator — bus index stays the same
+~mod1 = nd { SinOsc.ar(8, 0, 0.1) };
+
+// 7. Stop the modulators
+a.stopTag(\mod);
+
+// 8. Cleanup
 a.freeAll;
 a.reset;
 a.exit;
