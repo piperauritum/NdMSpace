@@ -42,6 +42,46 @@ or replace the function with another `nd { ... }`, the buses remain stable.
 
 This is essential for live coders who frequently rewrite running nodes.
 
+### Early bus reference (pre-binding argument buses)
+
+NdMSpace allows argument buses to be referenced *before* the corresponding
+NdM node is defined.
+Accessing an argument bus using the syntax:
+
+```supercollider
+~node[argName]
+````
+
+returns a `Bus` object and, if necessary, allocates it immediately.
+If the node does not yet exist, NdMSpace creates a silent placeholder
+associated with the given key.
+
+This behavior is called **Early bus reference**.
+
+The allocated bus is recorded in `NdMNameSpace` using the pair
+*(node key, argument name)* and is reused automatically when the node
+is later defined or redefined with `nd { ... }`.
+As a result, routing destinations remain stable across deferred node
+creation, live redefinition, and function switching.
+
+Example:
+
+```supercollider
+a = NdMSpace.enter;
+
+// The carrier does not exist yet.
+// ~car[\frq] allocates and returns the argument bus early.
+~mod = nd { SinOsc.ar(5).range(100, 400) }.out(~car[\frq]).play;
+
+// The carrier is defined later.
+// The argument \frq reuses the same bus automatically.
+~car = nd { |frq| SinOsc.ar(frq, 0, 0.1) }.out([0, 1]).play;
+```
+
+Early bus reference makes it possible to write node connections
+from either direction and is especially useful in live coding,
+where modulators and carriers are often defined incrementally.
+
 ---
 
 ## 2. **Stable fade-in / fade-out for edits, play, stop, free**

@@ -314,7 +314,7 @@ Returning a Bus is allowed by the language but is not meaningful as a signal.
 
 
 
-section::Lazy-bus notation (pre-allocating argument buses)
+section::Early bus reference (pre-allocating argument buses)
 
 In NdMSpace, accessing an argument bus using the syntax
 code::
@@ -332,10 +332,10 @@ code::
 nd { ... }
 ::
 definition exists.
-This usage pattern is referred to as the strong::lazy-bus notation::.
+This usage pattern is referred to as the strong::early bus reference::.
 
 note::
-The stability of the Bus in lazy-bus notation is guaranteed by NdM's
+The stability of the Bus in early bus reference is guaranteed by NdM's
 persistent argument-bus history.
 Argument buses are not tied to the lifetime of a specific Synth or
 NodeProxy instance, but are instead associated with a pair of
@@ -355,7 +355,7 @@ incrementally without breaking existing connections.
 
 subsection::Motivation
 
-Lazy-bus notation makes it possible to write node connections
+Early bus reference makes it possible to write node connections
 from either direction:
 
 list::
@@ -374,7 +374,7 @@ a = NdMSpace.enter;
 ~mod = nd { SinOsc.ar(5).range(100, 400) }.out(~car[\frq]).play;
 
 // The carrier (~car) is not defined yet.
-// Accessing ~car[\frq] here allocates and returns the argument Bus lazily.
+// Accessing ~car[\frq] here allocates and returns the argument Bus early.
 // A silent placeholder NdM for ~car is created at this point.
 
 ~car = nd { |frq| SinOsc.ar(frq, 0, 0.1) }.out([0, 1]).play;
@@ -501,7 +501,7 @@ Mixed audio/control bus rates inside a single out specification throw NdMError.
 code::
 // ** Connect nodes: carrier and modulators **
 
-// See 'Lazy-bus notation'
+// See 'Early bus reference'
 ~mod0 = nd { SinOsc.ar(10).range(0, 1) }.out(~car[\mod]).fade(2).tag(\fm);
 
 // Add another modulation signal to same bus
