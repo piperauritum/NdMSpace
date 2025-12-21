@@ -184,7 +184,7 @@ All buses are normalized internally before patching.
 If a key ends with `_a` or `_k`:
 
 ```supercollider
-~osc = nd { |freq, pan| ... };  // NdM(\osc_a) → all arguments audio-rate
+~osc_k = nd { |freq, pan| ... };  // NdM(\osc_k) → all arguments are control-rate
 ```
 
 This provides predictable DSP graphs during live performance.
