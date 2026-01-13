@@ -5,6 +5,9 @@
 NdMSpace provides a stable, persistent environment for managing **NdM** nodes as environment variables (`~key`), offering **bus-stable function replacement**, **per-instance fading**, **automatic reuse of argument buses**, and **safe namespace-level monitoring**.
 It is designed for **live coding musicians** who constantly redefine running processes while keeping audio stable, without clicks, bus conflicts, or broken mappings.
 
+NdMSpace also tracks connection order between nodes.
+While the internal graph is marked dirty, execution order is not guaranteed.
+
 The core engine is implemented in:
 
 * `NdMSpace`        (environment controller and global NdM frontend)
@@ -81,6 +84,19 @@ a = NdMSpace.enter;
 Early bus reference makes it possible to write node connections
 from either direction and is especially useful in live coding,
 where modulators and carriers are often defined incrementally.
+
+
+### Feedback loops and bus assignment
+
+NdMSpace does not support feedback loops in its argument-bus graph.
+
+If a feedback loop is formed between NdM nodes,
+graph rebuilding is aborted and bus assignment is not applied.
+A warning is printed to notify the user.
+
+For the exact definition of “feedback loop” in NdMSpace
+and recommended alternatives such as `InFeedback.ar`,
+see **NdMSpace.schelp — Feedback loop restriction (bus assignment)**.
 
 ---
 
@@ -199,6 +215,9 @@ This provides predictable DSP graphs during live performance.
 * tag grouping (`playTag`, `stopTag`, `freeTag`)
 * space-wide teardown (`stopAll`, `freeAll`, `reset`, `clean`)
 * persistent bus mapping (`NdMNameSpace`)
+
+NdMSpace.dump and dumpKey are primary diagnostic tools
+for observing dirty state and graph rebuilding results.
 
 Monitoring is safe and does not leak resources.
 

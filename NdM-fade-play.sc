@@ -2,54 +2,78 @@
 
 	// Build a ProxySynthDef capturing the current arg buses, rates, and outbus.
 	makeProxyFunc {
+		var ctxLocal;
+
+		ctxLocal = this.prepareMakeProxyContext;
+
+		^this.makeProxySynthDefFunc(ctxLocal);
+	}
+
+	makeProxySynthDefFunc { |ctxLocal|
 		var busesLocal;
 		var argNamesLocal;
-		// Cached references to argument metadata for building the UGen graph.
 		var funcLocal;
 		var outbusLocal;
-		// Per-argument rate table controlling kr/ar selection.
 		var argRatesLocal;
-		// Index of fadeBus used for exposing fade envelope externally.
 		var fadeBusIndexLocal;
-		// Debug ID allowing identification of each generated Synth instance.
 		var synthDebugIdLocal;
-		var fadeEnv;
-		var gateEnv;
-		var gainEnv;
-		var envShape;
 		var switchDurLocal;
+		var ndmLocal;
 
-		busesLocal = argBuses;
-		argNamesLocal = argNames;
-		funcLocal = func;
-		outbusLocal = outbus;
-		argRatesLocal = argRates;
+		busesLocal = ctxLocal.at(\busesLocal);
+		argNamesLocal = ctxLocal.at(\argNamesLocal);
+		funcLocal = ctxLocal.at(\funcLocal);
+		outbusLocal = ctxLocal.at(\outbusLocal);
+		argRatesLocal = ctxLocal.at(\argRatesLocal);
+		fadeBusIndexLocal = ctxLocal.at(\fadeBusIndexLocal);
+		synthDebugIdLocal = ctxLocal.at(\synthDebugIdLocal);
+		switchDurLocal = ctxLocal.at(\switchDurLocal);
+		ndmLocal = ctxLocal.at(\ndmLocal);
 
-		// Use existing fadeBus if available, otherwise mark inactive (-1).
-		if(fadeBus.notNil) {
-			fadeBusIndexLocal = fadeBus.index;
-		} {
-			fadeBusIndexLocal = -1;
-		};
+		^this.buildProxyUgenFunc(
+			busesLocal,
+			argNamesLocal,
+			argRatesLocal,
+			funcLocal,
+			outbusLocal,
+			fadeBusIndexLocal,
+			synthDebugIdLocal,
+			switchDurLocal,
+			ndmLocal
+		);
+	}
 
-		// Unique ID per Synth instantiation for debugging/tracking.
-		synthDebugIdLocal = UniqueID.next;
-		this.debugPost(
-			"[NdM.makeProxyFunc] key: " ++ key
-			++ "  synthDebugIdLocal: " ++ synthDebugIdLocal
+	buildNdmFadeEnv { |ndmAmp, ndmFade|
+		var xr;
+
+		xr = VarLag.kr(ndmAmp, ndmFade);
+
+		^xr;
+	}
+
+	buildNdmGateEnv { |ndmGate, switchDur|
+		var xr;
+		var envShape;
+
+		envShape = Env(
+			[0, 0, 1, 0],
+			[switchDur, switchDur, switchDur],
+			'lin',
+			2
 		);
 
-		// Resolve switch duration for gate-based crossfade handling.
-		switchDurLocal = switchDur;
-		if(switchDurLocal.isNil) {
-			switchDurLocal = 0.0;
-		};
+		xr = EnvGen.kr(envShape, ndmGate);
 
-		// Return a SynthDef function receiving control params.
+		^xr;
+	}
+
+	buildProxyUgenFunc {
+		|busesLocal, argNamesLocal, argRatesLocal, funcLocal, outbusLocal,
+		fadeBusIndexLocal, synthDebugIdLocal, switchDurLocal, ndmLocal|
+
 		^{
 			|ndmAmp = 0, ndmFade = 0, ndmGate = 1, switchDur = 0|
-			// |ndmAmp = 0, ndmFade = 0|
-			var values;
+			var argValues;
 			var signal;
 			var outInfo;
 			var busIndex;
@@ -59,83 +83,418 @@
 			var synthDebugId;
 			var gateEnv;
 			var gainEnv;
+			var envShape;
 
-			// Read all argument buses into UGen values.
-			values = this.readArgValues(busesLocal, argNamesLocal, argRatesLocal);
-			signal = funcLocal.valueArray(values);
+			ndmLocal.postReadArgMeta(busesLocal, argNamesLocal, argRatesLocal);
 
-			// Guard: returning Bus (language object) is invalid for UGen graphs.
-			// Convert the eventual "Bus * UGen" DoesNotUnderstandError into NdMError.
-			if(signal.isKindOf(Bus)) {
-				("[NdMWarn] WARN: [NdM] signal function returned a Bus. key=" ++ key
-					++ "  This may cause a DoesNotUnderstand error later (e.g. Bus * UGen). "
-					++ "Use In.ar(busIndex) / InFeedback.ar(busIndex) to read from a bus."
-				).postln;
-			};
+			argValues = ndmLocal.readArgValuesFromBuses(busesLocal, argNamesLocal, argRatesLocal);
 
-			if(signal.isKindOf(Collection)) {
-				if(signal.any { |v| v.isKindOf(Bus) }) {
-					NdMError.new(
-						"[NdM] invalid signal return (contains Bus). key=" ++ key
-						++ "  hint: use In.ar(busIndex) / InFeedback.ar(busIndex) to read from a bus."
-					).throw;
-				};
-			};
+			signal = this.evalProxySignalFromArgs(ndmLocal, funcLocal, argValues);
 
 			if(signal.notNil) {
-				// Determine output bus and its rate.
-				outInfo = this.resolveOutBus(outbusLocal);
-				busIndex = outInfo[0];
-				busRate = outInfo[1];
-
-				signalRate = signal.rate;
-
-				// Smooth fade (play/stop/free) handled by VarLag.
-				fadeEnv = VarLag.kr(ndmAmp, ndmFade);
-
-				// gateEnv handles function-switch smoothing (via EnvGen).
-				envShape = Env(
-					[0, 0, 1, 0],
-					[switchDur, switchDur, switchDur],
-					'lin',
-					2
+				this.writeProxySignalToBus(
+					ndmLocal,
+					signal,
+					outbusLocal,
+					fadeBusIndexLocal,
+					synthDebugIdLocal,
+					ndmAmp,
+					ndmFade,
+					ndmGate,
+					switchDur
 				);
-
-				// When switchDur == 0, EnvGen immediately outputs 1.0.
-				gateEnv = EnvGen.kr(envShape, ndmGate);
-
-				// Combine fade and switch envelopes for final multiplier.
-				gainEnv = fadeEnv * gateEnv;
-				signal = signal * gainEnv;
-
-				// Optional debug polling of envelopes.
-				this.conditionalPoll(fadeEnv, pollFreq, "[NdM] fadeEnv");
-				this.conditionalPoll(gateEnv, pollFreq, "[NdM] gateEnv");
-
-
-				// Emit unique Synth ID for debugging.
-				synthDebugId = DC.kr(synthDebugIdLocal);
-
-				this.conditionalPoll(synthDebugId, pollFreq, "[NdM] synthId");
-				this.conditionalPoll(fadeEnv, pollFreq, "[NdM] fadeEnv");
-
-				// Write fade envelope to control bus if configured.
-				if(fadeBusIndexLocal >= 0) {
-					Out.kr(fadeBusIndexLocal, fadeEnv);
-				};
-
-				// signal = signal * fadeEnv;
-				// (Legacy placeholder: gateEnv overridden to 1.0 below)
-				// gateEnv = 1.0;
-
-				// signal = signal * fadeEnv * gateEnv;
-
-				this.checkRateMatch(busRate, signalRate);
-				this.writeSignalToBus(signal, busIndex, busRate);
 			};
 
 			0;
 		};
+	}
+
+	evalProxySignalFromArgs { |ndmLocal, funcLocal, argValues|
+		var signalLocal;
+
+		ndmLocal.postMakeProxyDiag(funcLocal, argValues);
+
+		signalLocal = funcLocal.valueArray(argValues);
+
+		ndmLocal.debugPost("[DBG][MP] signal.class=" ++ signalLocal.class.asString);
+
+		ndmLocal.validateSignalReturn(signalLocal);
+
+		^signalLocal;
+	}
+
+	writeProxySignalToBus {
+		|ndmLocal, signalIn, outbusLocal, fadeBusIndexLocal, synthDebugIdLocal,
+		ndmAmp, ndmFade, ndmGate, switchDur|
+		var signalLocal;
+		var outInfo;
+		var busIndex;
+		var busRate;
+		var signalRate;
+		var fadeEnv;
+		var gateEnv;
+		var gainEnv;
+		var synthDebugId;
+
+		signalLocal = signalIn;
+
+		outInfo = ndmLocal.resolveOutBus(outbusLocal);
+		busIndex = outInfo[0];
+		busRate = outInfo[1];
+
+		signalRate = signalLocal.rate;
+
+		fadeEnv = this.buildNdmFadeEnv(ndmAmp, ndmFade);
+		gateEnv = this.buildNdmGateEnv(ndmGate, switchDur);
+
+		gainEnv = fadeEnv * gateEnv;
+		signalLocal = signalLocal * gainEnv;
+
+		ndmLocal.conditionalPoll(fadeEnv, pollFreq, "[NdM] fadeEnv");
+		ndmLocal.conditionalPoll(gateEnv, pollFreq, "[NdM] gateEnv");
+
+		synthDebugId = DC.kr(synthDebugIdLocal);
+
+		this.conditionalPoll(synthDebugId, pollFreq, "[NdM] synthId");
+		this.conditionalPoll(fadeEnv, pollFreq, "[NdM] fadeEnv");
+
+		if(fadeBusIndexLocal >= 0) {
+			Out.kr(fadeBusIndexLocal, fadeEnv);
+		};
+
+		ndmLocal.checkRateMatch(busRate, signalRate);
+		ndmLocal.writeSignalToBus(signalLocal, busIndex, busRate);
+
+		^this;
+	}
+
+	prepareMakeProxyContext {
+		var ctxLocal;
+		var busesLocal;
+		var argNamesLocal;
+		var funcLocal;
+		var outbusLocal;
+		var argRatesLocal;
+		var fadeBusIndexLocal;
+		var synthDebugIdLocal;
+		var switchDurLocal;
+
+		ctxLocal = IdentityDictionary.new;
+
+		busesLocal = if(this.argBuses.isKindOf(IdentityDictionary)) { this.argBuses } { IdentityDictionary.new };
+		argNamesLocal = if(this.argNames.isNil) { [ ] } { if(this.argNames.isKindOf(Array)) { this.argNames } { [this.argNames] } };
+		funcLocal = this.func;
+
+		outbusLocal = outbus;
+
+		argRatesLocal = if(this.argRates.isKindOf(IdentityDictionary)) { this.argRates } { IdentityDictionary.new };
+
+		if(fadeBus.notNil) {
+			fadeBusIndexLocal = fadeBus.index;
+		} {
+			fadeBusIndexLocal = -1;
+		};
+
+		synthDebugIdLocal = UniqueID.next;
+		this.debugPost(
+			"[NdM.makeProxyFunc] key: " ++ key
+			++ "  synthDebugIdLocal: " ++ synthDebugIdLocal
+		);
+
+		switchDurLocal = switchDur;
+		if(switchDurLocal.isNil) {
+			switchDurLocal = 0.0;
+		};
+
+		ctxLocal.put(\busesLocal, busesLocal);
+		ctxLocal.put(\argNamesLocal, argNamesLocal);
+		ctxLocal.put(\funcLocal, funcLocal);
+		ctxLocal.put(\outbusLocal, outbusLocal);
+		ctxLocal.put(\argRatesLocal, argRatesLocal);
+		ctxLocal.put(\fadeBusIndexLocal, fadeBusIndexLocal);
+		ctxLocal.put(\synthDebugIdLocal, synthDebugIdLocal);
+		ctxLocal.put(\switchDurLocal, switchDurLocal);
+		ctxLocal.put(\ndmLocal, this);
+
+		^ctxLocal;
+	}
+
+	// Debug helper: print argument metadata snapshot used by makeProxyFunc.
+	postReadArgMeta { |busesLocal, argNamesLocal, argRatesLocal|
+		this.debugPost("[DBG][READARG] busesLocal.class=" ++ busesLocal.class.asString);
+		this.debugPost("[DBG][READARG] argNamesLocal.class=" ++ argNamesLocal.class.asString);
+		this.debugPost("[DBG][READARG] argRatesLocal.class=" ++ argRatesLocal.class.asString);
+		this.debugPost("[DBG][READARG] busesLocal=" ++ busesLocal.asString);
+		this.debugPost("[DBG][READARG] argNamesLocal=" ++ argNamesLocal.asString);
+		this.debugPost("[DBG][READARG] argRatesLocal=" ++ argRatesLocal.asString);
+
+		^this;
+	}
+
+	// Debug helper: minimal diagnostics around valueArray inputs.
+	postMakeProxyDiag { |funcLocal, argValues|
+		this.debugPost("[DBG][MP] funcLocal.class=" ++ funcLocal.class.asString);
+		this.debugPost("[DBG][MP] funcLocal.argNames=" ++ funcLocal.def.argNames.asString);
+
+		this.debugPost("[DBG][MP] argValues.class=" ++ argValues.class.asString);
+		this.debugPost("[DBG][MP] argValues.size=" ++ argValues.size.asString);
+		this.debugPost("[DBG][MP] argValues elem classes="
+			++ (argValues.collect { |val| val.class.asString }).asString
+		);
+
+		if(argValues.size > 0) {
+			this.debugPost("[DBG][MP] argValues[0].class=" ++ argValues[0].class.asString);
+		};
+
+		this.debugPost("[DBG][MP] about to valueArray");
+
+		^this;
+	}
+
+	// Validate signal return value for SynthDef graphs.
+	// - Warn if signal itself is a Bus (language object)
+	// - Throw if signal is a Collection containing any Bus
+	validateSignalReturn { |signal|
+		var hasBus;
+
+		if(signal.isKindOf(Bus)) {
+			("[NdMWarn] WARN: [NdM] signal function returned a Bus. key=" ++ key
+				++ "  This may cause a DoesNotUnderstand error later (e.g. Bus * UGen). "
+				++ "Use In.ar(busIndex) / InFeedback.ar(busIndex) to read from a bus."
+			).postln;
+		};
+
+		hasBus = false;
+		if(signal.isKindOf(Collection)) {
+			hasBus = signal.any { |val| val.isKindOf(Bus) };
+		};
+
+		if(hasBus) {
+			NdMError.new(
+				"[NdM] invalid signal return (contains Bus). key=" ++ key
+				++ "  hint: use In.ar(busIndex) / InFeedback.ar(busIndex) to read from a bus."
+			).throw;
+		};
+
+		^this;
+	}
+
+	// Read all argument buses into UGen values.
+	//
+	// SPEC (argument-to-UGen safety):
+	// - This method must return only UGen-ready values (In/InFeedback or constants).
+	// - Language objects (e.g. NdM) must never reach UGen inputs; otherwise SynthDef build fails
+	//   (example: "SinOsc arg: 'freq' has bad input: a NdM").
+	// - If an argument bus exists but no upstream signal is connected yet, the resulting value can be 0,
+	//   which yields silence until a source is wired. This is expected behavior.
+	readArgValuesFromBuses { |busesLocal, argNamesLocal, argRatesLocal|
+		var argValues;
+		var idx;
+		var argName;
+		var busLocal;
+		var rateLocal;
+		var chansLocal;
+		var valLocal;
+
+		argValues = Array.newClear(argNamesLocal.size);
+
+		idx = 0;
+		while { idx < argNamesLocal.size } {
+			argName = argNamesLocal[idx];
+
+			busLocal = busesLocal[argName];
+			rateLocal = argRatesLocal[argName];
+
+			// Harden type (prevent non-Bus objects like NdM from entering UGen inputs)
+			if(busLocal.notNil) {
+				if(busLocal.isKindOf(Bus).not) {
+					busLocal = nil;
+				};
+			};
+
+			chansLocal = 1;
+			if(busLocal.notNil) {
+				chansLocal = busLocal.numChannels;
+			};
+
+			valLocal = 0;
+			if(busLocal.notNil) {
+				if((rateLocal == \audio) || (busLocal.rate == \audio)) {
+					valLocal = InFeedback.ar(busLocal.index, chansLocal);
+				} {
+					valLocal = In.kr(busLocal.index, chansLocal);
+				};
+			};
+
+			argValues[idx] = valLocal;
+
+			idx = idx + 1;
+		};
+
+		^argValues;
+	}
+
+	// Ensure this instance is registered in NdMNameSpace, even after reset.
+	// Primary trigger: out()/out_()
+	// Safety trigger: play()
+	//
+	// Responsibilities:
+	// 1) Re-register nodes (key -> live NdM instance).
+	// 2) Restore sink/edge state from the given outbus (when graph API exists).
+
+	// ** ensureRegistered is defined in NdM-core (primary trigger policy). **
+
+	// ensureRegistered { |outbusIn|
+	// 	var monitor1;
+	//
+	// 	monitor1 = NdMNameSpace.acquire;
+	//
+	// 	// Prefer graph restore API when present.
+	// 	if(monitor1.respondsTo(\restoreFromNode)) {
+	// 		monitor1.restoreFromNode(key, this, outbusIn);
+	// 		^this;
+	// 	};
+	//
+	// 	// Fallback: minimal registry only (older versions).
+	// 	monitor1.register(key, this);
+	//
+	// 	^this;
+	// }
+
+	// Graph restore helper (used after stop cleanup).
+	// If outbus is a Bus (early-bus reference), restore edge key -> outbus.index.
+	// If outbus is Integer/Array (direct sink), restore sink mark only.
+	restoreGraphFromOutbus {
+		var monitor1;
+		var outbusLocal;
+
+		// SPEC:
+		// - Rebuild graph marking after stop/play based on current outbus.
+		// - Mark sink when outbus is nil (default) or raw Integer/Array; do not mark for Bus.
+
+		monitor1 = NdMNameSpace.instance;
+		if(monitor1.isNil) {
+			^this;
+		};
+
+		// Prefer new graph API when present.
+		if(monitor1.respondsTo(\markSink).not) {
+			^this;
+		};
+
+		outbusLocal = outbus;
+
+		// Fix vX.Y.Z: B/C boundary guard (restore must not treat NdMSpace / invalid types as outbus)
+		if(outbusLocal.isKindOf(NdMSpace)) {
+			NdMError.reportOutBus(
+				\outbusB,
+				"NdM.restoreGraphFromOutbus@B-guardType",
+				key,
+				\B,
+				"outbus",
+				outbusLocal,
+				"fallback0"
+			);
+			outbusLocal = 0;
+		};
+
+		if(
+			outbusLocal.notNil
+			&& (outbusLocal.isKindOf(Bus).not)
+			&& (outbusLocal.isKindOf(Integer).not)
+			&& (outbusLocal.isKindOf(Array).not)
+		) {
+			NdMError.reportOutBus(
+				\outbusC,
+				"NdM.restoreGraphFromOutbus@C-guardType",
+				key,
+				\C,
+				"outbus",
+				outbusLocal,
+				"fallback0"
+			);
+			outbusLocal = 0;
+		};
+
+		this.debugPost(
+			"[NdM.restoreGraphFromOutbus] stage=B src=outbus key: " ++ key.asString
+			++ "  outbus: " ++ outbusLocal.asString
+			++ "  class: " ++ outbusLocal.class.asString
+		);
+
+		if(outbusLocal.isKindOf(Bus)) {
+			if(monitor1.respondsTo(\registerEdge)) {
+				monitor1.registerEdge(key, outbusLocal.index);
+			} {
+				// Fallback: sink-only.
+				monitor1.markSink(key);
+			};
+		} {
+			if(outbusLocal.isKindOf(Integer) || outbusLocal.isKindOf(Array)) {
+				monitor1.markSink(key);
+			};
+		};
+
+		^this;
+	}
+
+	sanitizeFadeSwitch { |fadeIn, switchIn|
+		var fadeDur;
+		var fadeLocal;
+		var switchLocal;
+
+		fadeDur = fadeIn;
+		if(fadeDur.isNil) {
+			fadeDur = 0.0;
+		};
+		if(fadeDur < 0.0) {
+			fadeDur = 0.0;
+		};
+		fadeLocal = fadeDur;
+
+		switchLocal = switchIn;
+		if(switchLocal.isNil) {
+			switchLocal = 0.0;
+		};
+		if(switchLocal < 0.0) {
+			switchLocal = 0.0;
+		};
+
+		^[fadeLocal, switchLocal];
+	}
+
+	// Request a graph-order rebuild without changing the signal function.
+	// B1: fade down (VarLag) -> swap source -> ampUp(init).
+	requestGraphRebuild {
+		var fadeDur;
+		var fadeLocal;
+		var switchLocal;
+
+		fadeDur = fadetime;
+		if(fadeDur.isNil) {
+			fadeDur = 0.0;
+		};
+		if(fadeDur < 0.0) {
+			fadeDur = 0.0;
+		};
+		fadeLocal = fadeDur;
+
+		switchLocal = switchDur;
+		if(switchLocal.isNil) {
+			switchLocal = 0.0;
+		};
+		if(switchLocal < 0.0) {
+			switchLocal = 0.0;
+		};
+
+		wantRebuild = true;
+		wantFade = fadeLocal;
+		wantSwitch = switchLocal;
+
+		reqGen = reqGen + 1;
+		this.applyKick;
+
+		^this;
 	}
 
 	// Start playback with VarLag-based fade-in and optional gate switch fade.
@@ -149,6 +508,9 @@
 			proxy = Ndef(key);
 			this.debugPost("[NdM.play] proxy recreated (was nil) key=" ++ key.asString);
 		};
+
+		// NOTE: Graph rebuild/restore trigger is unified to out()/out_().
+		// play() must not touch graph bookkeeping.
 
 		fadeDur = fadetime;
 		if(fadeDur.isNil) {
@@ -180,16 +542,23 @@
 		^this;
 	}
 
-
 	// Stop playback by fading amplitude to zero using VarLag.
 	stop {
 		var fadeDur;
 		var fadeLocal;
 		var switchLocal;
+		var monitor1;
 
 		if(proxy.isNil) {
 			this.debugPost("[NdM.stop] ignored: proxy is nil (already freed?) key=" ++ key.asString);
 			^this;
+		};
+
+		monitor1 = NdMNameSpace.instance;
+		if(monitor1.notNil) {
+			if(monitor1.respondsTo(\removeGraphKey)) {
+				monitor1.removeGraphKey(key);
+			};
 		};
 
 		fadeDur = fadetime;
@@ -218,6 +587,39 @@
 
 		^this;
 	}
+
+	// Request a graph-order rebuild without changing the signal function.
+	// Used by NdMSpace.rebuildGraphIfDirty to ensure writer->reader node ordering.
+	// B1: use VarLag fade (wantFade) so rebuild is click-free.
+	// requestGraphRebuild {
+	// 	var fadeLocal;
+	// 	var switchLocal;
+	//
+	// 	fadeLocal = fadetime;
+	// 	if(fadeLocal.isNil) {
+	// 		fadeLocal = 0.0;
+	// 	};
+	// 	if(fadeLocal < 0.0) {
+	// 		fadeLocal = 0.0;
+	// 	};
+	//
+	// 	switchLocal = switchDur;
+	// 	if(switchLocal.isNil) {
+	// 		switchLocal = 0.0;
+	// 	};
+	// 	if(switchLocal < 0.0) {
+	// 		switchLocal = 0.0;
+	// 	};
+	//
+	// 	wantRebuild = true;
+	// 	wantFade = fadeLocal;
+	// 	wantSwitch = switchLocal;
+	//
+	// 	reqGen = reqGen + 1;
+	// 	this.applyKick;
+	//
+	// 	^this;
+	// }
 
 	applyKick {
 		var doStart;
@@ -283,6 +685,7 @@
 		var switchLocal;
 		var wantPlayLocal;
 		var wantFreeLocal;
+		var wantRebuildLocal;
 		var funcLocal;
 		var funcChanged;
 
@@ -292,6 +695,7 @@
 
 		wantPlayLocal = if(wantPlay.isNil) { false } { wantPlay };
 		wantFreeLocal = if(wantFree.isNil) { false } { wantFree };
+		wantRebuildLocal = if(wantRebuild.isNil) { false } { wantRebuild };
 
 		fadeLocal = if(wantFade.isNil) { 0.0 } { wantFade };
 		if(fadeLocal < 0.0) {
@@ -313,6 +717,7 @@
 		xr.put(\proxy, proxyLocal);
 		xr.put(\wantPlay, wantPlayLocal);
 		xr.put(\wantFree, wantFreeLocal);
+		xr.put(\wantRebuild, wantRebuildLocal);
 		xr.put(\fade, fadeLocal);
 		xr.put(\switchDur, switchLocal);
 		xr.put(\func, funcLocal);
@@ -329,8 +734,10 @@
 		var switchLocal;
 		var wantPlayLocal;
 		var wantFreeLocal;
+		var wantRebuildLocal;
 		var funcLocal;
 		var funcChanged;
+		var ampInit;
 		var proxyFunc;
 		var monitor1;
 		var snap;
@@ -339,7 +746,7 @@
 		// removed: remain/step/remain2/step2 (handled by applyWaitGen)
 
 		// formerly mid-block var in old apply
-		var srv;
+		// var srv;
 
 		doLoop = true;
 
@@ -363,10 +770,13 @@
 				} {
 					wantPlayLocal = snap.at(\wantPlay);
 					wantFreeLocal = snap.at(\wantFree);
+					wantRebuildLocal = snap.at(\wantRebuild);
 					fadeLocal = snap.at(\fade);
 					switchLocal = snap.at(\switchDur);
 					funcLocal = snap.at(\func);
 					funcChanged = snap.at(\funcChanged);
+
+					ampInit = funcChanged;
 
 					this.debugPost(
 						"[APPLY] start gen=" ++ genStart.asString
@@ -387,13 +797,19 @@
 						switchLocal
 					);
 				} {
+					// B0) graph rebuild (B1: fadeDown -> swap source -> ampUp(init))
+					if(wantRebuildLocal) {
+						this.applyHandleGraphRebuild(genStart, proxyLocal, fadeLocal, switchLocal, funcLocal);
+						ampInit = true;
+					};
+
 					// B) function switch (gate down -> swap -> gate up)
 					if(funcChanged) {
 						this.applyHandleFuncSwitch(genStart, proxyLocal, fadeLocal, switchLocal, funcLocal);
 					};
 
 					// C) play/stop
-					this.applyHandlePlayStop(genStart, proxyLocal, fadeLocal, switchLocal, funcChanged, srv);
+					this.applyHandlePlayStop(genStart, proxyLocal, fadeLocal, switchLocal, wantPlayLocal, ampInit);
 
 					// generation gate
 					if(reqGen != genStart) {
@@ -473,6 +889,9 @@
 
 			monitor1 = NdMNameSpace.instance;
 			if(monitor1.notNil) {
+				if(monitor1.respondsTo(\removeGraphKey)) {
+					monitor1.removeGraphKey(key);
+				};
 				monitor1.unregister(key, this);
 			};
 
@@ -488,6 +907,108 @@
 			this.debugPost("[APPLY] freed gen=" ++ genStart.asString);
 		} {
 			this.debugPost("[APPLY] abort free gen=" ++ genStart.asString
+				++ " current=" ++ reqGen.asString);
+		};
+
+		^this;
+	}
+
+	applyHandleGraphRebuild { |genStart, proxyLocal, fadeLocal, switchLocal, funcLocal|
+		var proxyFunc;
+		var keyLocal;
+		var nodeBefore;
+		var nodeAfter;
+		var grpBefore;
+		var grpAfter;
+		var grpIdBefore;
+		var grpIdAfter;
+
+		// Fade down to 0 with VarLag, then rebuild source to enforce node ordering.
+		if(reqGen == genStart) {
+			proxyLocal.set(\ndmFade, fadeLocal, \switchDur, switchLocal, \ndmGate, 1);
+			proxyLocal.set(\ndmAmp, 0.0);
+		};
+
+		// Preemptable wait during fadeDown.
+		// - Skip wait when proxy is not playing (initial play).
+		// - Use NdM.fadeGap (click-safe gap), not user fade time.
+		if(proxyLocal.isPlaying) {
+			this.applyWaitGen(
+				genStart,
+				NdM.fadeGap ? 0.0,
+				0.05
+			);
+		};
+
+		if(reqGen == genStart) {
+			proxyFunc = this.makeProxyFunc;
+
+			keyLocal = key;
+
+			nodeBefore = nil;
+			nodeAfter = nil;
+			grpBefore = nil;
+			grpAfter = nil;
+			grpIdBefore = nil;
+			grpIdAfter = nil;
+
+			try { nodeBefore = proxyLocal.nodeID; } { nodeBefore = nil; };
+			try { grpBefore = proxyLocal.group; } { grpBefore = nil; };
+			if(grpBefore.notNil) {
+				try { grpIdBefore = grpBefore.nodeID; } { grpIdBefore = nil; };
+			};
+
+			this.debugPost(
+				"[DBG][GRAPH][REBUILD] before swap key=" ++ keyLocal.asString
+				++ " gen=" ++ genStart.asString
+				++ " nodeID=" ++ nodeBefore.asString
+				++ " groupID=" ++ grpIdBefore.asString
+			);
+
+			if(grpBefore.notNil) {
+				this.debugPost(
+					"[DBG][GRAPH][REBUILD] queryTree(before) key=" ++ keyLocal.asString
+					++ " groupID=" ++ grpIdBefore.asString
+				);
+				grpBefore.queryTree(true);
+			};
+
+			// Keep amp at 0 before swapping.
+			proxyLocal.set(
+				\ndmFade, fadeLocal,
+				\switchDur, switchLocal,
+				\ndmGate, 1,
+				\ndmAmp, 0.0
+			);
+
+			proxyLocal.source = proxyFunc;
+			appliedFunc = funcLocal;
+
+			try { nodeAfter = proxyLocal.nodeID; } { nodeAfter = nil; };
+			try { grpAfter = proxyLocal.group; } { grpAfter = nil; };
+			if(grpAfter.notNil) {
+				try { grpIdAfter = grpAfter.nodeID; } { grpIdAfter = nil; };
+			};
+
+			this.debugPost(
+				"[DBG][GRAPH][REBUILD] after  swap key=" ++ keyLocal.asString
+				++ " gen=" ++ genStart.asString
+				++ " nodeID=" ++ nodeAfter.asString
+				++ " groupID=" ++ grpIdAfter.asString
+			);
+
+			if(grpAfter.notNil) {
+				this.debugPost(
+					"[DBG][GRAPH][REBUILD] queryTree(after)  key=" ++ keyLocal.asString
+					++ " groupID=" ++ grpIdAfter.asString
+				);
+				grpAfter.queryTree(true);
+			};
+
+			wantRebuild = false;
+
+		} {
+			this.debugPost("[APPLY] abort graphRebuild gen=" ++ genStart.asString
 				++ " current=" ++ reqGen.asString);
 		};
 
@@ -539,25 +1060,34 @@
 		^this;
 	}
 
-	applyHandlePlayStop { |genStart, proxyLocal, fadeLocal, switchLocal, funcChanged, srv|
+	applyHandlePlayStop { |genStart, proxyLocal, fadeLocal, switchLocal, wantPlayLocal, ampInit|
+		var srvLocal;
+		var doPlay;
+
+		// Normalize play decision (avoid unintended stop path)
+		doPlay = wantPlayLocal && wantFree.not;
+
 		if(reqGen == genStart) {
 
-			if((wantPlay ? false)) {
+			if(doPlay) {
 				proxyLocal.play;
 
 				// Always push fade first (VarLag timebase).
 				proxyLocal.set(\ndmFade, fadeLocal, \switchDur, switchLocal, \ndmGate, 1);
 
-				// Critical: when funcChanged, force amp init to 0 then ramp to 1.
-				if(funcChanged && (fadeLocal > 0.0)) {
+				// Critical: when ampInit, force amp init to 0 then ramp to 1.
+				if(ampInit && (fadeLocal > 0.0)) {
 
 					proxyLocal.set(\ndmAmp, 0.0);
 
-					// Sync insurance
-					srv = this.getServer;
-					if(srv.notNil) {
+					// Sync insurance (fallback to Server.default)
+					srvLocal = this.getServer;
+					if(srvLocal.isNil) {
+						srvLocal = Server.default;
+					};
+					if(srvLocal.notNil) {
 						try {
-							srv.sync;
+							srvLocal.sync;
 						} {
 							// ignore
 						};

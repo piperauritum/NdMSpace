@@ -67,6 +67,7 @@ NdM : Object {
 	var wantPlay;
 	var wantFree;
 	var wantFunc;
+	var wantRebuild;
 	var wantFade;
 	var wantSwitch;
 	var reqGen;
@@ -96,6 +97,8 @@ NdM : Object {
 		var hasOld;
 		var outLabel;
 		var debugMessage;
+		var monitor1;
+		var ownerInfo;
 
 		// Label outbus for log readability.
 		if(outbus.isNil) {
@@ -118,7 +121,13 @@ NdM : Object {
 		instance = instances[keySymbol];
 		if(instance.notNil) {
 			// Existing instance is reused; only function/outbus update.
-			debugMessage =　debugMessage ++　"[NdM.new] reuse existing instance; call setFunc\n";
+			// BUT: NdMNameSpace may have been reset, so we must re-register and restore sink/edge state.
+			debugMessage =　debugMessage ++　"[NdM.new] reuse existing instance; re-register monitor; call setFunc\n";
+
+			// Existing instance is reused; NdMNameSpace may have been reset.
+			// Ensure the instance is re-registered and sink/edge is restored for this outbus.
+			instance.ensureRegistered(outbus);
+
 			instance.setFunc(func, outbus);
 			result = instance;
 			^result;
@@ -268,7 +277,41 @@ NdM : Object {
 
 		key = keySymbol;
 		func = funcIn;
-		outbus = outbusIn;
+
+		// Policy: persist outbus as raw-only (or nil) inside NdM.
+		// SPEC:
+		// - The outbus stored in NdM is restricted to raw-only: nil / Integer / Array / Bus.
+		// - The init argument outbusIn must be raw-only as well.
+		// - Invalid types must be reported (NdMError.reportOutBus) and must fall back to 0.
+		{
+			var rawOut;
+
+			rawOut = outbusIn;
+
+			if(rawOut.notNil) {
+
+				if(
+					(rawOut.notNil)
+					&& (rawOut.isKindOf(Bus).not)
+					&& (rawOut.isKindOf(Integer).not)
+					&& (rawOut.isKindOf(Array).not)
+				) {
+					NdMError.reportOutBus(
+						\outbusB,
+						"NdM.init@B-guardType",
+						key,
+						\B,
+						"outbusIn",
+						rawOut,
+						"fallback0"
+					);
+					rawOut = 0;
+				};
+			};
+
+			outbus = rawOut;
+		}.value;
+
 		fadetime = 0.01;					// Default fade time before user modification.
 		fadeGap = NdM.fadeGap ?? 0.04;		// Delay between fade start and amp update.
 		hasFadeInit = false;				// Track if initial fade setup has run.
@@ -288,9 +331,49 @@ NdM : Object {
 			).postln;
 		};
 
-		// Acquire modern namespace monitor (bus/mapping handler).
+		// NdMNameSpace is the authoritative registry for:
+		// - key -> live NdM nodes (register)
+		// - argName -> busIndex/rate history (remember/recall)
+		// - graph bookkeeping (sinks/edges) when the new API exists
 		monitor1 = NdMNameSpace.acquire;
 		monitor1.register(key, this);
+
+		// Graph hook (Task 1.5):
+		// NdMSpace.put creates NdM(key, func, outbusIn) without calling NdM.out,
+		// so we must record sink/edge here as well.
+		// SPEC:
+		// - Graph bookkeeping (sink/edge) must be recorded only for the raw output form: Integer / Array / Bus.
+		{
+			var rawOut;
+
+			rawOut = outbus;
+
+			if(monitor1.respondsTo(\markSink)) {
+				if(rawOut.isNil) {
+					// Default out is treated as sink (e.g. 0) even when outbus was not explicitly set yet.
+					monitor1.markSink(key);
+				} {
+					if(rawOut.isKindOf(Bus)) {
+						if(monitor1.respondsTo(\unmarkSink)) {
+							monitor1.unmarkSink(key);
+						};
+						if(monitor1.respondsTo(\registerEdge)) {
+							monitor1.registerEdge(key, rawOut.index);
+						} {
+							monitor1.markSink(key);
+						};
+					} {
+						if(rawOut.isKindOf(Integer) || rawOut.isKindOf(Array)) {
+							monitor1.markSink(key);
+						} {
+							if(monitor1.respondsTo(\unmarkSink)) {
+								monitor1.unmarkSink(key);
+							};
+						};
+					};
+				};
+			};
+		}.value;
 
 		server = Server.default;
 
@@ -490,29 +573,45 @@ NdM : Object {
 
 	// Read argument buses as UGen inputs, respecting their audio/control rate.
 	readArgValues { |busesLocal, argNamesLocal, argRatesLocal|
+		var busesDict;
+		var namesAry;
+		var ratesDict;
 		var values;
 
-		values = argNamesLocal.collect { |argName|
+		busesDict = if(busesLocal.isKindOf(IdentityDictionary)) { busesLocal } { IdentityDictionary.new };
+		ratesDict = if(argRatesLocal.isKindOf(IdentityDictionary)) { argRatesLocal } { IdentityDictionary.new };
+		namesAry = if(argNamesLocal.isKindOf(SequenceableCollection)) { argNamesLocal } { [] };
+
+		values = namesAry.collect { |argName|
 			var busLocal;
 			var rateLocal;
+			var xr;
 
-			busLocal = busesLocal[argName];
-			rateLocal = argRatesLocal[argName] ? \audio;
+			busLocal = busesDict[argName];
+			rateLocal = ratesDict[argName] ? \audio;
 
-			// InFeedback.ar gives stable audio-rate modulation with 1-block latency.
-			if(rateLocal == \audio) {
-				InFeedback.ar(busLocal.index, 1);
+			xr = if(busLocal.isNil) {
+				nil
 			} {
-				In.kr(busLocal.index, 1);
+				if(rateLocal == \audio) {
+					InFeedback.ar(busLocal.index, 1)
+				} {
+					In.kr(busLocal.index, 1)
+				}
 			};
-		};
 
-		^values;
+			xr
+		};
+		this.debugPost("[DBG][READARG] values.class=" ++ values.class.asString);
+		this.debugPost("[DBG][READARG] values.size=" ++ values.size.asString);
+		this.debugPost("[DBG][READARG] values elem classes=" ++ values.collect { |v| v.class.asString }.asString);
+		this.debugPost("[DBG][READARG] values=" ++ values.asString);
+		values
 	}
 
 	// Resolve outbus specification (nil / Bus / Int / Array[Int]).
 	// Always returns [busIndexOrArray, busRateSymbol].
-	resolveOutBus { |outbusLocal|
+	resolveOutBus { |outTarget|
 		var busIndex;
 		var busRate;
 		var result;
@@ -526,26 +625,36 @@ NdM : Object {
 		var idx;
 		var rateNow;
 
+		// SPEC:
+		// - Convert outTarget into [busIndex, busRate] used by writeSignalToBus.
+		// - Accept raw-only inputs at this boundary: Integer / Array(Integer|Bus) / Bus / nil.
+		// - No additional normalization here; NdM resolution is handled by NdMSpace before this call.
+		// - On invalid type or structure:
+		//     - reportError
+		//     - increment category counter (diagnostic)
+		//     - throw (to be swallowed by upper layers)
+		//     - fallback to busIndex=0, busRate=audio at the caller’s responsibility.
+
 		hasError = false;
 
 		this.debugPost(
-			"[NdM.resolveOutBus] key: " ++ key.asString
-			++ "  outbusLocal: " ++ outbusLocal.asString
-			++ "  class: " ++ outbusLocal.class.asString
+			"[NdM.resolveOutBus] stage=B src=outTarget key: " ++ key.asString
+			++ "  outTarget: " ++ outTarget.asString
+			++ "  class: " ++ outTarget.class.asString
 		);
 
-		if(outbusLocal.isNil) {
+		if(outTarget.isNil) {
 			busIndex = 0;
 			busRate = \audio;
 		} {
-			if(outbusLocal.isKindOf(Bus)) {
-				busIndex = outbusLocal.index;
-				busRate = outbusLocal.rate;
+			if(outTarget.isKindOf(Bus)) {
+				busIndex = outTarget.index;
+				busRate = outTarget.rate;
 			} {
-				isArray = outbusLocal.isKindOf(Array);
+				isArray = outTarget.isKindOf(Array);
 
 				if(isArray) {
-					if(outbusLocal.size <= 0) {
+					if(outTarget.size <= 0) {
 						NdMError("NdM: outbus array is empty").throw;
 					};
 
@@ -553,7 +662,7 @@ NdM : Object {
 					rateFirst = nil;
 					hasRate = false;
 
-					outbusLocal.do { |x|
+					outTarget.do { |x|
 						elem = x;
 						idx = nil;
 						rateNow = nil;
@@ -590,8 +699,15 @@ NdM : Object {
 					busRate = rateFirst ? \audio;
 				} {
 					// Integer is treated as audio out.
-					busIndex = outbusLocal;
-					busRate = \audio;
+					if(outTarget.isKindOf(Integer)) {
+						busIndex = outTarget;
+						busRate = \audio;
+					} {
+						NdMError(
+							"NdM: invalid outBus type: " ++ outTarget.class.asString
+							++ " value=" ++ outTarget.asString
+						).throw;
+					};
 				};
 			};
 		};
@@ -632,6 +748,7 @@ NdM : Object {
 		var chanCount;
 		var idx;
 		var sigChan;
+		var elem;
 
 		signalLocal = signalIn;
 		busIndexLocal = busIndexIn;
@@ -646,6 +763,47 @@ NdM : Object {
 
 		if(busIndexLocal.isNil) {
 			NdMError("NdM: resolved outbus index is nil").throw;
+		};
+
+		// Fix vX.Y.Z: C/D boundary guard (must catch outBus contamination here)
+		if((busIndexLocal.isKindOf(Integer) || busIndexLocal.isKindOf(Array)).not) {
+
+			NdMError.reportOutBus(
+				\outbusC,
+				"NdM.writeSignalToBus@C-guardType",
+				key,
+				\C,
+				"busIndexIn",
+				busIndexLocal,
+				"fallback0"
+			);
+
+			busIndexLocal = 0;
+		};
+
+		if(busIndexLocal.isKindOf(Array)) {
+			idx = 0;
+			indexCount = busIndexLocal.size;
+			while { idx < indexCount } {
+				elem = busIndexLocal[idx];
+				if(elem.isKindOf(Integer).not) {
+
+					NdMError.reportOutBus(
+						\outbusD,
+						"NdM.writeSignalToBus@D-guardElem",
+						key,
+						\D,
+						"busIndexIn",
+						elem,
+						"idx=" ++ idx.asString ++ " fallback0"
+					);
+
+					busIndexLocal = 0;
+					idx = indexCount; // break
+				} {
+					idx = idx + 1;
+				};
+			};
 		};
 
 		outFunc = if(busRateLocal == \control) {
@@ -707,16 +865,121 @@ NdM : Object {
 		signalIn
 	}
 
+	// Ensure this NdM is registered as a live node after NdMNameSpace.reset.
+	// Policy: registry only (nodeSet). Do not rebuild graph/order here.
+	ensureRegistered { |outbusIn|
+		var monitor1;
+
+		monitor1 = NdMNameSpace.acquire;
+		monitor1.register(key, this);
+
+		^this;
+	}
+
 	// Unified getter/setter interface for output bus routing.
 	out { |val|
 		var result;
+		var monitor1;
+		var oldOut;
+		var oldRaw;
+		var doRemoveOld;
+		var ownerInfo;
+		var outTarget;
+		var rawOut;
 
 		if(val.isNil) {
-			// Getter: returns current outbus value.
 			result = outbus;
 		} {
-			// Setter: update outbus and immediately refresh proxy source.
-			outbus = val;
+			oldOut = outbus;
+
+			// raw-only: comparisons use raw Bus/Int/Array directly
+			oldRaw = oldOut;
+
+			outTarget = val;
+			rawOut = outTarget;
+
+			// Fix vX.Y.Z: A/C boundary guard (must not accept NdMSpace as outBus)
+			if(rawOut.isKindOf(NdMSpace)) {
+				NdMError.reportOutBus(
+					\outbusA,
+					"NdM.out_@A-guardType",
+					key,
+					\A,
+					"val",
+					rawOut,
+					"fallback0"
+				);
+				rawOut = 0;
+			};
+
+			// store raw-only (A policy: raw-unify)
+			outbus = rawOut;
+
+			// GOAL:
+			// - Use out / out_ as the primary trigger to deterministically re-register the node into NdMNameSpace first.
+			// - Even after NdMNameSpace.reset, traversing the out path restores sink/edge records,
+			//   ensuring that subsequent graph updates (markSink / registerEdge, etc.) operate consistently.
+			// Primary trigger: ensure monitor registration before graph updates.
+			this.ensureRegistered(rawOut);
+			monitor1 = NdMNameSpace.acquire;
+
+			if(monitor1.respondsTo(\markSink)) {
+
+				// remove old edge if it existed
+				doRemoveOld = false;
+
+				if(oldRaw.isKindOf(Bus)) {
+					if(rawOut.isKindOf(Bus)) {
+						if(oldRaw.index != rawOut.index) {
+							doRemoveOld = true;
+						};
+					} {
+						doRemoveOld = true;
+					};
+				};
+
+				if(doRemoveOld) {
+					if(monitor1.respondsTo(\unregisterEdge)) {
+						monitor1.unregisterEdge(key, oldRaw.index);
+					};
+				};
+
+				// apply new sink/edge state
+				if(rawOut.isKindOf(Bus)) {
+
+					ownerInfo = nil;
+					if(monitor1.respondsTo(\ensureOwnerForBusIndex)) {
+						ownerInfo = monitor1.ensureOwnerForBusIndex(rawOut.index);
+					} {
+						if(monitor1.respondsTo(\ownerForBusIndex)) {
+							ownerInfo = monitor1.ownerForBusIndex(rawOut.index);
+						};
+					};
+
+					if(ownerInfo.isNil) {
+						// external bus => sink
+						monitor1.markSink(key);
+					} {
+						// known owner => edge, not a sink
+						if(monitor1.respondsTo(\unmarkSink)) {
+							monitor1.unmarkSink(key);
+						};
+						if(monitor1.respondsTo(\registerEdge)) {
+							monitor1.registerEdge(key, rawOut.index);
+						};
+					};
+
+				} {
+					if(rawOut.isKindOf(Integer) || rawOut.isKindOf(Array)) {
+						monitor1.markSink(key);
+					} {
+						if(monitor1.respondsTo(\unmarkSink)) {
+							monitor1.unmarkSink(key);
+						};
+					};
+				};
+			};
+
 			this.updateProxyOut;
 			result = this;
 		};
@@ -726,7 +989,105 @@ NdM : Object {
 
 	// Setter-only version for property assignment syntax.
 	out_ { |val|
-		outbus = val;
+		var monitor1;
+		var oldOut;
+		var oldRaw;
+		var doRemoveOld;
+		var ownerInfo;
+		var outTarget;
+		var rawOut;
+
+		oldOut = outbus;
+
+		// raw-only: out_ assumes raw Bus/Int/Array directly
+		oldRaw = oldOut;
+
+		outTarget = val;
+		rawOut = outTarget;
+
+		// Fix vX.Y.Z: A/C boundary guard (must not accept NdMSpace as outBus)
+		if(rawOut.isKindOf(NdMSpace)) {
+
+			NdMError.reportOutBus(
+				\outbusA,
+				"NdM.out_@A-guardType",
+				key,
+				\A,
+				"val",
+				rawOut,
+				"fallback0"
+			);
+
+			rawOut = 0;
+		};
+
+		// store raw only (A 方針)
+		outbus = rawOut;
+
+		// GOAL:
+		// - Ensure that the setter path (out_) guarantees the same “primary trigger” ordering as out
+		//   (re-registration first, then graph updates).
+		this.ensureRegistered(rawOut);
+
+		monitor1 = NdMNameSpace.acquire;
+
+		if(monitor1.respondsTo(\markSink)) {
+
+			// remove old edge if it existed
+			doRemoveOld = false;
+
+			if(oldRaw.isKindOf(Bus)) {
+				if(rawOut.isKindOf(Bus)) {
+					if(oldRaw.index != rawOut.index) {
+						doRemoveOld = true;
+					};
+				} {
+					doRemoveOld = true;
+				};
+			};
+
+			if(doRemoveOld) {
+				if(monitor1.respondsTo(\unregisterEdge)) {
+					monitor1.unregisterEdge(key, oldRaw.index);
+				};
+			};
+
+			// apply new sink/edge state
+			if(rawOut.isKindOf(Bus)) {
+
+				ownerInfo = nil;
+				if(monitor1.respondsTo(\ensureOwnerForBusIndex)) {
+					ownerInfo = monitor1.ensureOwnerForBusIndex(rawOut.index);
+				} {
+					if(monitor1.respondsTo(\ownerForBusIndex)) {
+						ownerInfo = monitor1.ownerForBusIndex(rawOut.index);
+					};
+				};
+
+				if(ownerInfo.isNil) {
+					// external bus => sink
+					monitor1.markSink(key);
+				} {
+					// known owner => edge, not a sink
+					if(monitor1.respondsTo(\unmarkSink)) {
+						monitor1.unmarkSink(key);
+					};
+					if(monitor1.respondsTo(\registerEdge)) {
+						monitor1.registerEdge(key, rawOut.index);
+					};
+				};
+
+			} {
+				if(rawOut.isKindOf(Integer) || rawOut.isKindOf(Array)) {
+					monitor1.markSink(key);
+				} {
+					if(monitor1.respondsTo(\unmarkSink)) {
+						monitor1.unmarkSink(key);
+					};
+				};
+			};
+		};
+
 		this.updateProxyOut;
 	}
 
@@ -745,8 +1106,8 @@ NdM : Object {
 
 	// short aliases (live coding convenience)
 
-	o { |outBusIn|
-		^this.out(outBusIn);
+	o { |outTarget|
+		^this.out(outTarget);
 	}
 
 	f { |fadeTimeIn|

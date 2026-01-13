@@ -70,28 +70,43 @@ If an Array contains Bus objects, all Bus elements must share the same rate
 INSTANCEMETHODS::
 
 method::play
-Start the NdM by building a proxy function that:
+Start audio playback for this NdM.
+
+At play-time, the proxy function:
 
 list::
 ## Reads all argument buses
 ## Evaluates strong::func::
 ## Applies fade processing via strong::ndmAmp:: and strong::ndmFade::
 ## Applies function-switch gating when necessary
-## Writes the result to strong::outbus::
+## Writes the result to the current strong::outbus:: (set by strong::out:: / strong::out_::)
 ::
 
 Then strong::proxy.play:: is called.
 If fade time is set (via strong::fade::), audio enters smoothly.
 
+note::
+Graph bookkeeping and restore triggers are handled by strong::out:: / strong::out_::.
+strong::play:: itself does not modify graph state.
+::
+
 method::stop
 Fade out and stop audio playback.
-The NdM instance, its buses, and its history in link::Classes/NdMNameSpace::
-remain intact so you can call play again.
+The NdM instance and its buses remain intact so you can call play again.
+
+note::
+This also removes the key from the graph table, so it will not participate in graph rebuilding
+until strong::out:: / strong::out_:: is called again.
+::
 
 method::free
 Fade out, clear the proxy, free argument buses, and unregister the NdM from the live-node table.
 The bus history strong::(argName → busIndex, rate):: remains stored in NdMNameSpace
 so that future NdM nodes with the same key reuse the same buses.
+
+note::
+This also removes the key from the graph table.
+::
 
 subsection::Method aliases (live coding)
 
@@ -115,6 +130,7 @@ list::
 ::
 
 note::
+strong::dbg:: / strong::poll:: are available only on NdM instances (not on NdMSpaceSpec).
 NdMSpace also provides a space-wide strong::dbg:: method.
 strong::NdMSpace.dbg(1/0):: applies to all existing NdM nodes immediately and sets the default
 for future strong::nd { ... }:: conversions.
@@ -123,6 +139,7 @@ Use NdMSpace.dbg when you want debug settings to persist across repeated redefin
 
 method::fade
 Get or set the fade time in seconds used by play/stop/free and function switching.
+NdM uses its own VarLag-based fade; NodeProxy.fadeTime is disabled (always 0.0).
 
 subsection::Output routing (out / out_)
 
@@ -145,6 +162,17 @@ nodes by controlling server node order, or use an audio-rate signal path instead
 a control bus.
 ::
 
+note::
+NdM argument buses are designed for acyclic signal routing.
+Feedback loops are not supported by NdM's bus-assignment mechanism.
+
+See link::Classes/NdMSpace::, subsection::Feedback loop restriction (bus assignment)
+for details and recommended alternatives such as code::InFeedback.ar::.
+
+If feedback processing is required, use explicit feedback UGens
+(e.g. InFeedback.ar) inside the SynthDef instead of NdM argument routing.
+::
+
 subsection::Allowed out specifications
 
 strong::out(x):: accepts:
@@ -156,6 +184,17 @@ list::
 ::
 
 Empty arrays are invalid.
+
+note::
+strong::outbus:: must not be an NdMSpace instance.
+strong::out:: / strong::out_:: also update graph bookkeeping (sink/edge) for rebuilding.
+::
+
+note::
+strong::out:: does not accept an NdMSpace instance.
+Passing an NdMSpace (or values derived from it) as an out specification is invalid
+and will result in an error.
+::
 
 subsection::Array mapping rules (no leakage)
 

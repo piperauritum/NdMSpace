@@ -11,11 +11,18 @@ or when a function is wrapped with strong::nd { ... }:: and stored into a key,
 it is automatically converted into an NdM instance, which can then be controlled uniformly through
 methods such as strong::play::, strong::stop::, strong::free::, strong::out::, strong::fade::, and strong::tag::.
 
+The strong::nd { ... }:: notation is only available inside an active NdMSpace
+between strong::NdMSpace.enter:: and strong::NdMSpace.exit::.
+
 When strong::enter:: is called, the NdMSpace becomes the active environment,
 and all strong::~key:: lookups resolve to this space.
 Each key creates or updates an NdM node, and multiple NdMSpaces may be entered or exited,
 allowing the user to switch environments cleanly.
-Calling strong::exit:: restores the previous environment without destroying the stored NdM objects.
+
+Entering a space also establishes a boundary for NdM lifecycle coordination,
+including argument-bus allocation, graph tracking, monitoring, and restore handling.
+Calling strong::exit:: restores the previous environment while keeping all NdM objects,
+bus histories, and graph state stored in the space instance for later reactivation.
 
 NdMSpace provides unified management of NdM registration, tag grouping, node state inspection,
 argument-bus (argBus) allocation, and cleanup routines.
@@ -43,10 +50,13 @@ a.exit;
 ::
 
 note::
-For a full teardown of an NdMSpace, use strong::reset:: followed by strong::exit::.
-Calling strong::clean:: only removes stale references and does not clear keys, argument buses, or tags.
-Thus strong::clean:: -> strong::exit:: leaves NdM objects and environment bindings in place,
-and does not constitute a complete shutdown of the space.
+strong::clean:: stops and frees all NdM instances in the current space
+and resets internal state (keys, argument buses, tags, and graph bookkeeping),
+preparing the environment for a fresh setup.
+
+This example relies on clean performing a full reset.
+Use strong::reset:: followed by strong::exit:: when you only want to leave
+the current space and restore the previous environment without freeing nodes.
 ::
 
 CLASSMETHODS::
@@ -98,8 +108,8 @@ Clear all NdM mappings, argument buses, and tag associations from the active NdM
 This prepares the space for a fresh set of definitions.
 
 method::clean
-Remove internal references to NdM objects that have been freed or are no longer active.
-This does not modify active nodes.
+Stop and free all NdM instances, then reset the active NdMSpace (keys, argument buses, tags, and graph state).
+Convenience helper equivalent to strong::exitAll:: + strong::freeAll:: + strong::reset::.
 
 method::status
 Print a summary of the active NdMSpace:
@@ -158,8 +168,8 @@ Clear all key–NdM mappings, argument buses, and tag associations managed by th
 This prepares the space for rebuilding from scratch.
 
 method::clean
-Remove references to NdM instances that have been freed, stopped permanently, or are no longer valid.
-Does not affect currently active nodes.
+Stop and free all NdM instances, then reset the active NdMSpace (keys, argument buses, tags, and graph state).
+Convenience helper equivalent to strong::exitAll:: + strong::freeAll:: + strong::reset::.
 
 method::status
 Post a short summary of this NdMSpace, including current keys, node states, and basic allocation details.
@@ -234,9 +244,60 @@ subsection::Monitoring
 method::dump
 Post the full internal state of this NdMSpace, including NdM keys, argument buses, tags, and monitor data.
 
+This method is the primary diagnostic entry point for observing
+dirty state, graph activity, and rebuild-related conditions.
+
 method::dumpKey
 Post detailed information about a specific NdM key within this NdMSpace.
 Shows function details, argument buses, output mapping, and tag membership.
+
+This method is commonly used to inspect graph participation,
+dependency resolution, and rebuild-related state for a single node.
+
+subsection::Graph rebuilding (dirty / rebuild)
+
+NdMSpace maintains a dependency graph between NdM nodes based on argument-bus connections.
+When this graph changes, the space enters a strong::dirty:: state, meaning that execution order
+is no longer guaranteed to be correct.
+
+While the space is dirty:
+
+list::
+## Correct execution order between nodes is not guaranteed.
+## Graph rebuilding is attempted only when the dirty flag is set.
+## The dirty flag is cleared only after a successful rebuild completes.
+## Graph restoration is centralized and applied immediately before playback.
+## If a safe execution order cannot be determined, the rebuild is aborted and not treated as success.
+::
+
+This mechanism ensures that NdM nodes are reordered only when necessary,
+and that unsafe or ambiguous graph states are never applied silently.
+
+method::requestGraphRebuild
+Request a graph rebuild for the active NdMSpace.
+
+Multiple rebuild requests issued in a short time span are automatically
+coalesced into a single rebuild attempt.
+If a rebuild is already running, an additional request schedules a rerun
+after the current rebuild finishes, ensuring that graph updates are applied
+in a stable and serialized manner.
+
+method::rebuildGraphIfDirty
+Attempt to rebuild the execution order of NdM nodes if the space is marked dirty.
+
+If the space is not dirty, this method does nothing.
+If the space is dirty, NdMSpace computes a safe execution order based on
+argument-bus dependencies and applies it to server node groups.
+
+If no valid order can be determined (for example, due to a feedback loop),
+the rebuild is aborted and the space remains dirty.
+
+note::
+Graph restoration after reset or stop/play cycles is implemented outside NdMSpace.
+See strong::NdMNameSpace.restoreFromNode:: for namespace-level restoration,
+and strong::NdM.restoreGraphFromOutbus:: for NdM-side helper logic applied
+immediately before playback.
+::
 
 subsection::Internal
 
@@ -312,6 +373,43 @@ NdM does not guarantee type validation of arbitrary return values from user func
 Returning a Bus is allowed by the language but is not meaningful as a signal.
 ::
 
+subsection::Feedback loop restriction (bus assignment)
+
+NdMSpace does not allow feedback loops in its bus-assignment graph.
+
+If a feedback loop is detected between NdM nodes during graph rebuilding,
+the rebuild process is aborted and bus assignment is not applied.
+
+A feedback loop means that two or more NdM nodes depend on each other
+via argument buses, for example:
+code::
+mod -> nod
+nod -> mod
+::
+In such cases, NdMSpace cannot determine a safe rebuild order,
+and stable bus assignment is no longer guaranteed.
+
+When a feedback loop is detected, NdMSpace emits a warning:
+code::
+[WARN] NdM feedback loop detected (bus assignment is not allowed)
+::
+and keeps the graph in a dirty state without applying changes.
+
+This restriction applies only to NdM's bus-assignment mechanism.
+If audio-rate feedback is intentionally required,
+use standard SuperCollider techniques such as InFeedback.ar
+inside the SynthDef instead of NdM argument buses.
+
+See subsection::Graph rebuilding (dirty / rebuild):: for details on
+how feedback loops cause rebuild attempts to abort and remain unsatisfied.
+
+note::
+If feedback processing is intentionally required, it must be implemented
+explicitly inside the SynthDef using SuperCollider UGens such as
+code::InFeedback.ar:: or code::LocalIn / LocalOut::.
+
+NdM argument buses are designed for acyclic control and modulation routing only.
+::
 
 
 section::Early bus reference (pre-allocating argument buses)
