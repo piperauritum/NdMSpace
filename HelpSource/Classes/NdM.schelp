@@ -166,8 +166,8 @@ note::
 NdM argument buses are designed for acyclic signal routing.
 Feedback loops are not supported by NdM's bus-assignment mechanism.
 
-See link::Classes/NdMSpace::, subsection::Feedback loop restriction (bus assignment)
-for details and recommended alternatives such as code::InFeedback.ar::.
+See link::Classes/NdMSpace:: > strong::Feedback loop restriction (bus assignment)::
+ for details and recommended alternatives such as code::InFeedback.ar::.
 
 If feedback processing is required, use explicit feedback UGens
 (e.g. InFeedback.ar) inside the SynthDef instead of NdM argument routing.

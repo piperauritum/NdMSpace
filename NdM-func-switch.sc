@@ -11,9 +11,9 @@
 		var switchLocal;
 		var outTarget;
 		var rawOut;
-		var outBusArg;
-		var ownerInfo;
-		var ownerNs;
+		// var outBusArg;
+		// var ownerInfo;
+		// var ownerNs;
 
 		// SPEC:
 		// - Update NdM's user function and output routing (outbus), then refresh arg tables and graph registration.

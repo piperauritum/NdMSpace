@@ -400,7 +400,7 @@ If audio-rate feedback is intentionally required,
 use standard SuperCollider techniques such as InFeedback.ar
 inside the SynthDef instead of NdM argument buses.
 
-See subsection::Graph rebuilding (dirty / rebuild):: for details on
+See strong::Graph rebuilding (dirty / rebuild):: for details on
 how feedback loops cause rebuild attempts to abort and remain unsatisfied.
 
 note::

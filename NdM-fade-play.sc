@@ -738,8 +738,8 @@
 		var funcLocal;
 		var funcChanged;
 		var ampInit;
-		var proxyFunc;
-		var monitor1;
+		// var proxyFunc;
+		// var monitor1;
 		var snap;
 
 		// preemptable-wait temps (must be declared at block head)

@@ -97,8 +97,8 @@ NdM : Object {
 		var hasOld;
 		var outLabel;
 		var debugMessage;
-		var monitor1;
-		var ownerInfo;
+		// var monitor1;
+		// var ownerInfo;
 
 		// Label outbus for log readability.
 		if(outbus.isNil) {
