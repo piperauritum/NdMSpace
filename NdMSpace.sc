@@ -665,12 +665,12 @@ NdMSpace : LazyEnvir {
 		delayEnd = this.graphRebuildScheduleKicks(kickNdms, kickKeys, dbgOrder);
 		this.graphRebuildScheduleObserveAfterKicks(delayEnd, order, kickNdms, spaceGroup, dbgOrder);
 
-		monitor.feedbackWarnSig = nil;
-		monitor.clearGraphDirty;
+		// Safety: also try immediate reorder (best-effort) based on topoOrder.
+		// (The definitive reorder is done in observe-after-kicks.)
+		this.graphReorderProxyGroupsToTopoOrder(order);
 
-		if(dbgOrder) {
-			this.debugPost { "[DBG][GRAPH] clearGraphDirty done" };
-		};
+		// Fix: dirty clear is done in graphRebuildScheduleObserveAfterKicks (async tail),
+		// after proxy group reordering is applied on the server.
 
 		// [2-C] 「試みた」結果：order を返す（成功/失敗判定は非対象）
 		this.debugPost { "[DBG][GRAPH][TRY] result=order size=" ++ order.size.asString };
@@ -869,7 +869,9 @@ NdMSpace : LazyEnvir {
 					++ " ii=" ++ ii.asString
 				};
 
-				nd.requestGraphRebuild;
+				try { nd.requestGraphRebuild; } {
+					space.debugPost { "[WARN][GRAPH][KICK] requestGraphRebuild failed key=" ++ keyLocal.asString };
+				};
 
 				if(proxyLocal.notNil) {
 					try {
@@ -902,11 +904,13 @@ NdMSpace : LazyEnvir {
 			});
 		};
 
+		// NOTE: delayEnd must be computed regardless of dbgOrder,
+		// because observe-after-kicks must run after kicks for audio correctness.
+		delayEnd = ((kickNdms.size.asFloat * 0.06) + 0.02);
+
 		if(dbgOrder) {
 			kickStr = kickKeys.asString;
 			space.debugPost { "[DBG][GRAPH] kickedKeys=" ++ kickStr };
-
-			delayEnd = ((kickNdms.size.asFloat * 0.06) + 0.02);
 		};
 
 		^delayEnd;
@@ -926,35 +930,42 @@ NdMSpace : LazyEnvir {
 		space = this;
 		monitor = NdMNameSpace.instance;
 
-		if(dbgOrder) {
-			SystemClock.sched(delayEnd, {
+		SystemClock.sched(delayEnd, {
+			var reorderOk;
+
+			reorderOk = true;
+
+			if(dbgOrder) {
 				space.debugPost { "[DBG][GRAPH][ORDER] observe-after-kicks delay=" ++ delayEnd.asString };
 				space.debugPost { "[DBG][GRAPH][ORDER] topoOrder=" ++ order.asString };
+			};
 
-				// Policy 2: reorder NdM proxy groups to match topoOrder.
-				// This changes actual server execution order (writer groups before reader groups).
-				if(spaceGroup.notNil) {
-					order.do { |kk2|
-						var nd2;
-						var px2;
-						var gg2;
+			// Policy 2: reorder NdM proxy groups to match topoOrder.
+			// This changes actual server execution order (writer groups before reader groups).
+			// NOTE: must run regardless of dbgOrder (audio correctness must not depend on dbg).
+			if(spaceGroup.notNil) {
+				order.do { |kk2|
+					var nd2;
+					var px2;
+					var gg2;
 
-						nd2 = envir.at(kk2);
-						px2 = nil;
-						gg2 = nil;
+					nd2 = envir.at(kk2);
+					px2 = nil;
+					gg2 = nil;
 
-						if(nd2.isKindOf(NdM)) {
-							try { px2 = nd2.proxy; } { px2 = nil; };
-							if(px2.notNil) {
-								try { gg2 = px2.group; } { gg2 = nil; };
-								if(gg2.notNil) {
-									gg2.moveToTail(spaceGroup);
-								};
+					if(nd2.isKindOf(NdM)) {
+						try { px2 = nd2.proxy; } { px2 = nil; };
+						if(px2.notNil) {
+							try { gg2 = px2.group; } { gg2 = nil; };
+							if(gg2.notNil) {
+								try { gg2.moveToTail(spaceGroup); } { reorderOk = false; };
 							};
 						};
 					};
 				};
+			};
 
+			if(dbgOrder) {
 				grpSet = IdentitySet.new;
 
 				kickNdms.do { |nd|
@@ -987,30 +998,38 @@ NdMSpace : LazyEnvir {
 					try { grpIdVal = gg.nodeID; } { grpIdVal = nil; };
 
 					space.debugPost { "[DBG][GRAPH][ORDER] queryTree groupID=" ++ grpIdVal.asString };
-
 					gg.queryTree(true);
 				};
+			};
 
-				// Fix: clear dirty mark only after the rebuild sequence (including async) reaches here.
-				if(monitor.notNil) {
-					monitor.feedbackWarnSig = nil;
+			// Clear dirty only after reordering is applied.
+			// If reorder failed, keep dirty and force rerun.
+			if(monitor.notNil) {
+				monitor.feedbackWarnSig = nil;
+
+				if(reorderOk) {
 					monitor.clearGraphDirty;
 
-					space.debugPost { "[DBG][GRAPH] clearGraphDirty done" };
+					if(dbgOrder) {
+						space.debugPost { "[DBG][GRAPH] clearGraphDirty done" };
+					};
+				} {
+					graphApplyRerun = true;
+					space.debugPost { "[WARN][GRAPH] reorder failed; keep dirty and rerun" };
 				};
+			};
 
-				// Release the "running" guard here (async tail reached).
-				graphApplyRunning = false;
+			// Release the "running" guard here (async tail reached).
+			graphApplyRunning = false;
 
-				// If requests arrived during running, fold them into one rerun.
-				if(graphApplyRerun) {
-					graphApplyRerun = false;
-					this.requestGraphRebuild;
-				};
+			// If requests arrived during running, fold them into one rerun.
+			if(graphApplyRerun) {
+				graphApplyRerun = false;
+				this.requestGraphRebuild;
+			};
 
-				nil
-			});
-		};
+			nil
+		});
 
 		^nil;
 	}
@@ -1050,7 +1069,9 @@ NdMSpace : LazyEnvir {
 					try { groupItem = proxyItem.group; } { groupItem = nil; };
 
 					if(groupItem.notNil) {
-						groupItem.moveToTail(spaceGroup);
+						try { groupItem.moveToTail(spaceGroup); } {
+							this.debugPost { "[WARN][GRAPH][REORDER] moveToTail failed key=" ++ keyItem.asString };
+						};
 					};
 				};
 			};
@@ -1061,6 +1082,7 @@ NdMSpace : LazyEnvir {
 
 	requestGraphRebuild {
 		var doStart;
+		var res;
 
 		// [2-C] 判定ログ（第三者が「試みた／試みない」をログだけで判断できる最小情報）
 		this.debugPost { "[DBG][GRAPH][REQ] pending=" ++ graphApplyPending.asString
@@ -1083,39 +1105,33 @@ NdMSpace : LazyEnvir {
 		if(doStart) {
 			graphApplyPending = true;
 
-			// [2-C] 「試みる」入口：この tick で sched を確保
-			this.debugPost { "[DBG][GRAPH][REQ] decision=schedule" };
+			// [2-C] 「試みる」入口：この呼び出しで即時実行（sched に依存しない）
+			this.debugPost { "[DBG][GRAPH][REQ] decision=runNow" };
 
-			AppClock.sched(0.0, {
-				var res;
+			// Consume the scheduled flag; from here, pending is false (next call can schedule/run again).
+			graphApplyPending = false;
 
-				// Consume the scheduled flag; from here, pending is false (next tick can schedule again).
-				graphApplyPending = false;
+			// Start running; rerun collects requests that arrive while running.
+			graphApplyRunning = true;
+			graphApplyRerun = false;
 
-				// Start running; rerun collects requests that arrive while running.
-				graphApplyRunning = true;
-				graphApplyRerun = false;
+			// [2-C] 実行開始（ここから rebuildGraphIfDirty を呼ぶ）
+			this.debugPost { "[DBG][GRAPH][RUN] start" };
 
-				// [2-C] 実行開始（ここから rebuildGraphIfDirty を呼ぶ）
-				this.debugPost { "[DBG][GRAPH][RUN] start" };
+			res = this.rebuildGraphIfDirty;
 
-				res = this.rebuildGraphIfDirty;
+			// If rebuildGraphIfDirty returned nil, no async tail is expected.
+			// In that case, close running here.
+			if(res.isNil) {
+				graphApplyRunning = false;
 
-				// If rebuild aborted early (no async tail), close running here and rerun if needed.
-				if(res.isNil) {
-					graphApplyRunning = false;
+				this.debugPost { "[DBG][GRAPH][RUN] endImmediate rerun=" ++ graphApplyRerun.asString };
 
-					// [2-C] rebuildGraphIfDirty が「試みない」側で即時 nil を返した場合（もしくは abort）
-					this.debugPost { "[DBG][GRAPH][RUN] endImmediate rerun=" ++ graphApplyRerun.asString };
-
-					if(graphApplyRerun) {
-						graphApplyRerun = false;
-						this.requestGraphRebuild;
-					};
+				if(graphApplyRerun) {
+					graphApplyRerun = false;
+					this.requestGraphRebuild;
 				};
-
-				nil
-			});
+			};
 		} {
 			// [2-C] 「試みない」理由：同一 tick で既に pending（sched 済み）
 			this.debugPost { "[DBG][GRAPH][REQ] decision=skipAlreadyPending" };
@@ -1262,13 +1278,14 @@ NdMSpace : LazyEnvir {
 
 		envir.put(key, ndmObj);
 
-		monitor = NdMNameSpace.acquire;
-		dirtyNow = false;
-		if(monitor.notNil) {
-			dirtyNow = monitor.graphDirtyValue;
-		};
-
 		if(specObj.autoPlay) {
+			// Fix: capture dirtyNow as late as possible (right before autoPlay decision).
+			monitor = NdMNameSpace.acquire;
+			dirtyNow = false;
+			if(monitor.notNil) {
+				dirtyNow = monitor.graphDirtyValue;
+			};
+
 			if(dirtyNow) {
 				this.requestGraphRebuild;
 			};
