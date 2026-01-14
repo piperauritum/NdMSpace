@@ -257,18 +257,6 @@ a.exit;
 
 Short aliases: `.o`=out, `.f`=fade, `.t`=tag, `.p`=play, `.s`=stop.
 
-### Query the input bus:
-
-```supercollider
-~a.bus(\sth);
-```
-
-### Monitor everything:
-
-```supercollider
-NdMSpace.dump;
-```
-
 ---
 
 # Live-Coding Example: Patch Stability
