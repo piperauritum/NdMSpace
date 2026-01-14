@@ -1,90 +1,134 @@
-# NdMSpace — A Live-Coding Environment With Persistent, Bus-Stable NdM Nodes
+# NdMSpace
 
 *(for Live Coding in SuperCollider)*
 
-NdMSpace provides a stable, persistent environment for managing **NdM** nodes as environment variables (`~key`), offering **bus-stable function replacement**, **per-instance fading**, **automatic reuse of argument buses**, and **safe namespace-level monitoring**.
-It is designed for **live coding musicians** who constantly redefine running processes while keeping audio stable, without clicks, bus conflicts, or broken mappings.
+NdMSpace provides a stable and predictable environment for building signal networks in SuperCollider.
+Its purpose is to make live coding with shared parameters safe, reusable, and easy to reason about,
+without requiring manual bus management or careful control of node execution order.
 
-NdMSpace also tracks connection order between nodes.
-While the internal graph is marked dirty, execution order is not guaranteed.
-
-The core engine is implemented in:
-
-* `NdMSpace`        (environment controller and global NdM frontend)
-* `NdM`             (per-node wrapper around Ndef, including fade/switch logic)
-* `NdMError`        (lightweight error wrapper)
-* `NdMSpaceSpec`    (front-end builder used by `nd { ... }`; not part of the engine itself)
-* `NdMNameSpace`    (persistent bus/rate/tag history)
-* `NdMTag`          (tag-based group control)
+This document describes the behavior and advantages of NdMSpace as implemented in the current version.
 
 ---
 
-# Why NdMSpace? (Live-Coding Advantages)
+## What NdMSpace provides
 
-Live coders working directly with Ndef often encounter the same issues.
-NdMSpace addresses them by managing NdM nodes in a unified space.
+NdMSpace manages connections between nodes so that:
 
-## 1. **Persistent argument buses even when functions change**
+- multiple nodes can safely control the same parameter
+- parameter connections survive node redefinition
+- execution order is kept consistent automatically
+- common pitfalls of shared buses in SuperCollider are avoided
 
-When you change a function’s argument list, Ndef allocates **new buses**, breaking modulation chains.
+All of this is handled by NdMSpace itself.
+Users write ordinary NdM code and do not need to manage buses or node order explicitly.
 
-NdMSpace + NdMNameSpace guarantee that:
+---
 
-* each key (e.g. `~osc`) retains a persistent mapping
-* argument names (`freq`, `mod`, etc.) reuse the **same bus indices**
-* modulation networks survive live edits
-* no “zombie buses” accumulate
+## Argument buses: additive and stable
 
-Whenever you write:
+### Argument buses are additive
 
-```supercollider
-~osc = nd { |freq| SinOsc.ar(freq) };
-```
+In NdMSpace, each argument of an NdM node is backed by its own *argument bus*.
 
-or replace the function with another `nd { ... }`, the buses remain stable.
+When more than one node writes to the same argument bus, their signals are **added together**.
+No writer overwrites another.
 
-This is essential for live coders who frequently rewrite running nodes.
-
-### Early bus reference (pre-binding argument buses)
-
-NdMSpace allows argument buses to be referenced *before* the corresponding
-NdM node is defined.
-Accessing an argument bus using the syntax:
-
-```supercollider
-~node[argName]
-````
-
-returns a `Bus` object and, if necessary, allocates it immediately.
-If the node does not yet exist, NdMSpace creates a silent placeholder
-associated with the given key.
-
-This behavior is called **Early bus reference**.
-
-The allocated bus is recorded in `NdMNameSpace` using the pair
-*(node key, argument name)* and is reused automatically when the node
-is later defined or redefined with `nd { ... }`.
-As a result, routing destinations remain stable across deferred node
-creation, live redefinition, and function switching.
-
-Example:
+This allows multiple modulators to contribute to a single parameter naturally.
 
 ```supercollider
 a = NdMSpace.enter;
 
-// The carrier does not exist yet.
-// ~car[\frq] allocates and returns the argument bus early.
-~mod = nd { SinOsc.ar(5).range(100, 400) }.out(~car[\frq]).play;
+~osc = nd { |freq|
+    SinOsc.ar(freq, 0, 0.2)
+}.out([0, 1]).play;
 
-// The carrier is defined later.
-// The argument \frq reuses the same bus automatically.
-~car = nd { |frq| SinOsc.ar(frq, 0, 0.1) }.out([0, 1]).play;
+~mod1 = nd { SinOsc.ar(0.3).range(100, 400) }.out(~osc[\freq]).play;
+~mod2 = nd { LFNoise0.ar(1).range(100, 2000) }.out(~osc[\freq]).play;
+
+// Cleaning up the space
+a.freeAll;
+a.reset;
+a.exit;
+````
+
+This behavior is consistent for both control-rate and audio-rate arguments.
+
+---
+
+### Argument buses persist across redefinition
+
+Argument buses in NdMSpace are associated with a pair of:
+
+* the NdM key
+* the argument name
+
+As long as these remain the same, the same argument bus is reused.
+
+Redefining a node does **not** break existing connections.
+Modulators continue to write to the same argument bus even if the main node is stopped,
+redefined, or recreated.
+
+```supercollider
+~osc = nd { |freq| SinOsc.ar(freq, 0, 0.2) }.out(0).play;
+~mod = nd { SinOsc.ar(0.3).range(100, 400) }.out(~osc[\freq]).play;
+
+~osc.stop;
+
+// redefine ~osc
+~osc = nd { |freq| Saw.ar(freq, 0.2) }.out(0).play;
+// ~mod still controls freq
 ```
 
-Early bus reference makes it possible to write node connections
-from either direction and is especially useful in live coding,
-where modulators and carriers are often defined incrementally.
+This makes live coding safer and more predictable, since connections do not silently disappear.
 
+---
+
+## Audio-rate and control-rate support
+
+NdMSpace supports both audio-rate and control-rate argument buses.
+
+The rate of an argument is determined automatically from:
+
+* argument name suffixes (`_a`, `_k`)
+* key name suffixes
+* explicit argument annotations
+
+Internally, NdMSpace reads each argument bus using the appropriate mechanism for its rate.
+From the user’s perspective, this means:
+
+* audio-rate modulation works as expected
+* control-rate parameters can be shared freely
+* no manual rate handling is required in normal usage
+
+```supercollider
+~osc = nd { |mod_k|
+    SinOsc.ar(200 + mod_k, 0, 0.1)
+}.out(0).play;
+
+~lfo = nd { SinOsc.kr(5).range(-50, 50) }.out(~osc[\mod_k]).play;
+```
+
+---
+
+## Execution order safety
+
+### NdMSpace maintains a correct execution order
+
+In plain SuperCollider, reading from a shared bus can depend on the execution order of nodes.
+This can lead to subtle and confusing behavior when nodes are added or redefined.
+
+NdMSpace prevents this issue.
+
+Whenever connections between nodes change, NdMSpace automatically adjusts the execution order so that:
+
+* nodes writing to an argument bus run before
+* nodes reading from that bus
+
+This happens transparently.
+As a result, argument buses behave as if all contributing writers have already been applied
+when the reader runs.
+
+In normal NdMSpace usage, users do not need to think about node order at all.
 
 ### Feedback loops and bus assignment
 
@@ -100,126 +144,50 @@ see **NdMSpace.schelp — Feedback loop restriction (bus assignment)**.
 
 ---
 
-## 2. **Stable fade-in / fade-out for edits, play, stop, free**
+## Redefinition and live coding
 
-With raw Ndef, `.play` and `.stop` may click depending on state.
+NdMSpace is designed for live coding workflows.
 
-NdM introduces two hidden control arguments:
+* Nodes can be stopped and redefined freely
+* Argument buses remain stable
+* Existing modulators keep working
+* Execution order is re-evaluated automatically when needed
 
-* `ndmAmp`
-* `ndmFade`
-
-Your signal is multiplied with:
-
-```supercollider
-VarLag.kr(ndmAmp, ndmFade)
-```
-
-giving smooth transitions on:
-
-```supercollider
-~osc.fade = 2;
-~osc.play;
-```
-
-The same applies to `.stop` and `.free`, and NdMSpace manages their timing cleanly.
+Features such as `fade`, `play`, `stop`, and switching between definitions
+build on top of these guarantees and do not invalidate existing connections.
 
 ---
 
-## 3. **Server-synchronized play()**
+## Output routing and argument buses
 
-NdM performs `Server:sync` after building the node, ensuring:
+Argument buses and output routing serve different roles in NdMSpace.
 
-* the node exists
-* controls are installed
-* fade controls are ready
+* **Argument buses**
 
-This eliminates the “first control message was ignored” issue.
+  * additive
+  * shared between multiple nodes
+  * managed automatically
+* **Output routing (`out`)**
 
----
+  * uses raw bus indices or arrays
+  * follows stricter rules
+  * acts as a boundary for graph updates
 
-## 4. **Explicit, flexible output-bus routing**
-
-Via NdM:
-
-* integers
-* Bus objects
-* arrays of bus indices
-
-are normalized and rate-checked before patching.
-NdMSpace keeps these mappings consistent across function updates.
-
-### **Output mapping rules (important)**
-
-NdM defines explicit and predictable rules for mapping signals to output buses.
-
-#### 1. Mono signal → multiple buses
-
-If the function returns a mono signal and `.out` receives multiple buses:
-
-```supercollider
-~osc = nd { SinOsc.ar(100) }.out([0, 1]).play;
-````
-
-the same signal is written independently to each bus:
-
-```supercollider
-Out.ar(0, sig);
-Out.ar(1, sig);
-```
-
-This is **not duplication via channel expansion**, and does not cause leakage
-or unintended summing. The result is centered playback.
-
-#### 2. Multi-channel signal → multiple buses
-
-If the function returns an array and the number of channels matches
-the number of buses:
-
-```supercollider
-~osc = nd { Pan2.ar(SinOsc.ar(100), 0) }.out([0, 1]).play;
-```
-
-each channel is mapped one-to-one to each bus, equivalent to standard
-`Out.ar(bus, sig)` behavior in SuperCollider.
-
-#### 3. Channel/bus count mismatch
-
-Mappings where the number of signal channels does not match the number
-of buses (except mono → N) are currently undefined and should be avoided.
-
-#### 4. Bus objects
-
-`.out` accepts integers, `Bus` objects, or arrays of either.
-All buses are normalized internally before patching.
+This separation keeps parameter modulation flexible while keeping output routing explicit and safe.
 
 ---
 
-## 5. **Argument-rate inference from key names**
+## Summary
 
-If a key ends with `_a` or `_k`:
+NdMSpace provides:
 
-```supercollider
-~osc_k = nd { |freq, pan| ... };  // NdM(\osc_k) → all arguments are control-rate
-```
+* additive, persistent argument buses
+* support for audio-rate and control-rate parameters
+* automatic execution order management
+* safe live redefinition without broken connections
 
-This provides predictable DSP graphs during live performance.
-
----
-
-## 6. **A reliable monitor: NdMSpace + NdMNameSpace**
-
-`NdMSpace` offers:
-
-* node lookup (`nodes`, `get`)
-* tag grouping (`playTag`, `stopTag`, `freeTag`)
-* space-wide teardown (`stopAll`, `freeAll`, `reset`, `clean`)
-* persistent bus mapping (`NdMNameSpace`)
-
-NdMSpace.dump and dumpKey are primary diagnostic tools
-for observing dirty state and graph rebuilding results.
-
-Monitoring is safe and does not leak resources.
+These features allow users to focus on musical structure and interaction,
+rather than low-level bus and node management.
 
 ---
 

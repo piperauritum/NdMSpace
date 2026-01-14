@@ -263,11 +263,13 @@ is no longer guaranteed to be correct.
 While the space is dirty:
 
 list::
-## Correct execution order between nodes is not guaranteed.
+## Execution order may be temporarily outdated until graph rebuilding completes.
 ## Graph rebuilding is attempted only when the dirty flag is set.
+## A successful rebuild establishes a correct execution order
+   between argument-bus writers and readers.
 ## The dirty flag is cleared only after a successful rebuild completes.
-## Graph restoration is centralized and applied immediately before playback.
-## If a safe execution order cannot be determined, the rebuild is aborted and not treated as success.
+## If a safe execution order cannot be determined, the rebuild is aborted
+   and no changes are applied.
 ::
 
 This mechanism ensures that NdM nodes are reordered only when necessary,

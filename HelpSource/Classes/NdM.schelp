@@ -147,19 +147,20 @@ NdM writes the return signal of strong::func:: to strong::outbus:: using Out.ar 
 The output behavior depends on the shape of the output specification and the signal.
 
 note::
-NdM argument buses are implemented as control buses and are read inside the running node
-using strong::In.kr::.
 On the SuperCollider server, control-bus writes (strong::Out.kr::) and reads
 (strong::In.kr::) occur in node execution order within each control block.
 
-When multiple nodes write to the same control bus, the value observed by a given node
-depends on whether those writers have already executed in the current block.
-As a result, a node cannot reliably read the final summed value of a shared control bus
-independent of node execution order.
+NdMSpace avoids exposing this execution-order dependency to the user.
+When argument-bus connections between NdM nodes change,
+NdMSpace automatically rebuilds node order so that
+nodes writing to an argument bus execute before nodes reading from it.
 
-If deterministic results are required, ensure that writer nodes execute before reader
-nodes by controlling server node order, or use an audio-rate signal path instead of
-a control bus.
+As a result, NdM argument buses behave as if the final summed value
+of all contributing writers were read consistently,
+as long as a valid acyclic graph can be established.
+
+If a safe execution order cannot be determined (for example, due to a feedback loop),
+graph rebuilding is aborted and bus assignment is not applied.
 ::
 
 note::
