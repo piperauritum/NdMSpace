@@ -130,6 +130,8 @@ when the reader runs.
 
 In normal NdMSpace usage, users do not need to think about node order at all.
 
+---
+
 ### Feedback loops and bus assignment
 
 NdMSpace does not support feedback loops in its argument-bus graph.
