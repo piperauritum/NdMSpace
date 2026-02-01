@@ -37,10 +37,9 @@ This allows multiple modulators to contribute to a single parameter naturally.
 
 ```supercollider
 a = NdMSpace.enter;
+a.defaultOut = [0, 1];
 
-~osc = nd { |freq|
-    SinOsc.ar(freq, 0, 0.2)
-}.out([0, 1]).play;
+~osc = nd { |freq| SinOsc.ar(freq, 0, 0.2) }.play;
 
 ~mod1 = nd { SinOsc.ar(0.3).range(100, 400) }.out(~osc[\freq]).play;
 ~mod2 = nd { LFNoise0.ar(1).range(100, 2000) }.out(~osc[\freq]).play;
@@ -69,14 +68,14 @@ Modulators continue to write to the same argument bus even if the main node is s
 redefined, or recreated.
 
 ```supercollider
-~osc = nd { |freq| SinOsc.ar(freq, 0, 0.2) }.out(0).play;
+~osc = nd { |freq| SinOsc.ar(freq, 0, 0.2) }.play;
 ~mod = nd { SinOsc.ar(0.3).range(100, 400) }.out(~osc[\freq]).play;
 
 ~osc.stop;
 
 // redefine ~osc
-~osc = nd { |freq| Saw.ar(freq, 0.2) }.out(0).play;
 // ~mod still controls freq
+~osc = nd { |freq| Saw.ar(freq, 0.2) }.play;
 ```
 
 This makes live coding safer and more predictable, since connections do not silently disappear.
@@ -101,9 +100,7 @@ From the user’s perspective, this means:
 * no manual rate handling is required in normal usage
 
 ```supercollider
-~osc = nd { |mod_k|
-    SinOsc.ar(200 + mod_k, 0, 0.1)
-}.out(0).play;
+~osc = nd { |mod_k| SinOsc.ar(200 + mod_k, 0, 0.1) }.play;
 
 ~lfo = nd { SinOsc.kr(5).range(-50, 50) }.out(~osc[\mod_k]).play;
 ```
@@ -223,13 +220,12 @@ a.exit;
 
 ```supercollider
 a = NdMSpace.enter;
+a.defaultOut = [0, 1];
 
-~osc = nd { |freq| SinOsc.ar(freq, 0, 0.1) }.o(0).p;
+~osc = nd { |freq| SinOsc.ar(freq, 0, 0.1) }.p;
 ~lfo = nd { SinOsc.ar(1).range(200, 1200) }.o(~osc[\freq]).p;
 
 a.freeAll;
-a.reset;
-a.exit;
 ```
 
 ---
