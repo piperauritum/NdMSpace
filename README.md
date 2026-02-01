@@ -304,7 +304,7 @@ All modulation paths remain intact; no clicks, no re-routing.
 NdMSpace and NdM provide clean, readable error messages:
 
 ```supercollider
-NdMError("NdM: rate mismatch (sig=ar, bus=kr)").throw;
+[NdMError] ERROR: NdM: rate mismatch (sig=kr, bus=ar)
 ```
 
 Example:
