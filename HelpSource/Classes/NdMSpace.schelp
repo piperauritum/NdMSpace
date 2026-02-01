@@ -191,7 +191,7 @@ is created in this space and no explicit output bus is specified.
 If the key already has an NdM, the output bus is inherited from the existing NdM,
 regardless of defaultOut.
 
-argument::outBus
+argument::outBusIn
 The default output bus used for new NdM nodes when no explicit output is specified.
 
 list::
