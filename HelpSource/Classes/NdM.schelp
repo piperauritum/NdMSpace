@@ -1,5 +1,5 @@
 class:: NdM
-categories:: Live Coding
+categories:: NdM, Live Coding
 summary:: Ndef-based modular node wrapper with stable argument buses, fade/switch control, and NdMSpace integration
 
 DESCRIPTION::
@@ -65,6 +65,7 @@ Array elements may be Integers or Buses; Array[Bus] is supported.
 note::
 If an Array contains Bus objects, all Bus elements must share the same rate
 (audio or control). Mixed bus rates inside one Array are not supported and throw NdMError.
+Errors related to invalid bus specifications are reported via link::Classes/NdMError::.
 ::
 
 INSTANCEMETHODS::
@@ -101,8 +102,8 @@ until strong::out:: / strong::out_:: is called again.
 
 method::free
 Fade out, clear the proxy, free argument buses, and unregister the NdM from the live-node table.
-The bus history strong::(argName → busIndex, rate):: remains stored in NdMNameSpace
-so that future NdM nodes with the same key reuse the same buses.
+The bus history strong::(argName → busIndex, rate):: remains stored in link::Classes/NdMNameSpace::
+ so that future NdM nodes with the same key reuse the same buses.
 
 note::
 This also removes the key from the graph table.
@@ -147,6 +148,14 @@ NdM writes the return signal of strong::func:: to strong::outbus:: using Out.ar 
 The output behavior depends on the shape of the output specification and the signal.
 
 note::
+When an NdM is created inside an NdMSpace and no explicit output bus is specified,
+the space may supply a default output bus using strong::NdMSpace.defaultOut_::.
+If no default is set, the fallback is bus 0.
+See link::Classes/NdMSpace:: > strong::Default output bus (defaultOut / defaultOut_)::
+ for details.
+::
+
+note::
 On the SuperCollider server, control-bus writes (strong::Out.kr::) and reads
 (strong::In.kr::) occur in node execution order within each control block.
 
@@ -189,6 +198,7 @@ Empty arrays are invalid.
 note::
 strong::outbus:: must not be an NdMSpace instance.
 strong::out:: / strong::out_:: also update graph bookkeeping (sink/edge) for rebuilding.
+Errors related to invalid bus specifications are reported via link::Classes/NdMError::.
 ::
 
 note::

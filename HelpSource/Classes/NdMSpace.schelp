@@ -1,5 +1,5 @@
 class:: NdMSpace
-categories:: Live Coding
+categories:: NdM, Live Coding
 summary:: NdM environment
 
 DESCRIPTION::
@@ -177,6 +177,31 @@ Post a short summary of this NdMSpace, including current keys, node states, and 
 method::fadeGap
 Get or set the class-level delay (in seconds) that NdMSpace waits after issuing fade-related operations such as strong::stopAll:: or strong::freeAll::.
 This gap allows fade envelopes to finish on the server before node cleanup, bus reuse, or internal resets occur.
+
+subsection::Default output bus (defaultOut)
+
+method::defaultOut
+Get or set the default output-bus specification for this NdMSpace.
+
+If called without arguments, returns the current default output-bus specification.
+
+If called with an argument, sets the default output bus used when a new NdM
+is created in this space and no explicit output bus is specified.
+
+If the key already has an NdM, the output bus is inherited from the existing NdM,
+regardless of defaultOut.
+
+argument::outBus
+The default output bus used for new NdM nodes when no explicit output is specified.
+
+list::
+## nil: clear the default (fall back to bus 0).
+## Integer: audio-rate output starting bus index.
+## Bus: output starting bus index is strong::bus.index::, and the output rate follows strong::bus.rate::.
+## Array: a list of output targets. Each element must be an Integer or a Bus.
+::
+
+If an invalid type is provided, the value is ignored and an error is reported.
 
 subsection::Debug flag (space-wide)
 
@@ -439,7 +464,7 @@ The stability of the Bus in early bus reference is guaranteed by NdM's
 persistent argument-bus history.
 Argument buses are not tied to the lifetime of a specific Synth or
 NodeProxy instance, but are instead associated with a pair of
-strong::(node key, argument name):: and recorded in NdMNameSpace.
+strong::(node key, argument name):: and recorded in link::Classes/NdMNameSpace::.
 
 When code::~node[argName]:: is evaluated, NdMNameSpace either recalls an
 existing bus index for that key/argument pair or allocates a new one and
@@ -528,14 +553,16 @@ code::
 // ** Enter NdMSpace mode and get a front-end handle **
 
 a = NdMSpace.enter;
+a.defaultOut = [0, 1];   // set default output buses for nodes without an explicit out
 
 // ** Basic node setup **
 
-~osc = nd { SinOsc.ar(440, 0, 0.2) };	// define audio function for this node
-~osc.out([0,1]);	// route output to buses 0 and 1 (Array mapping rules apply; see NdM out specification)
-~osc.fade(1);		// set fade time (seconds) for play/stop/free
-~osc.tag(\osc);		// add tag \osc to this node
-~osc.play;			// start playback with fade-in
+~osc = nd { SinOsc.ar(440, 0, 0.2) };   // define audio function for this node
+// output is routed to buses 0 and 1 via defaultOut
+// (Array mapping rules apply; see NdM out specification)
+~osc.fade(1);            // set fade time (seconds) for play/stop/free
+~osc.tag(\osc);          // add tag \osc to this node
+~osc.play;               // start playback with fade-in
 
 // ** The same can be written with method chaining **
 
@@ -596,6 +623,7 @@ subsection::Connecting NdMs via argument buses
 note::
 If an output Array contains Bus objects, all Bus elements must share the same rate.
 Mixed audio/control bus rates inside a single out specification throw NdMError.
+Errors related to invalid bus specifications are reported via link::Classes/NdMError::.
 ::
 
 code::
@@ -608,7 +636,7 @@ code::
 ~mod1 = nd { LFNoise0.ar(1) }.out(~car[\mod]).fade(2).tag(\fm);
 
 // The carrier
-~car = nd { |mod| SinOsc.ar(mod * 200 + 200, 0, 0.2) }.out([0,1]).fade(2).tag(\fm);
+~car = nd { |mod| SinOsc.ar(mod * 200 + 200, 0, 0.2) }.fade(2).tag(\fm);
 
 
 // ** Obtain argument buses **

@@ -175,6 +175,11 @@ Argument buses and output routing serve different roles in NdMSpace.
   * follows stricter rules
   * acts as a boundary for graph updates
 
+If `out` is not specified explicitly for a node, NdMSpace uses the current
+`defaultOut` value as its output target.
+Array mapping rules apply in the same way as with an explicit `out`
+(see NdM out specification).
+
 This separation keeps parameter modulation flexible while keeping output routing explicit and safe.
 
 ---
@@ -197,11 +202,12 @@ rather than low-level bus and node management.
 
 ```supercollider
 a = NdMSpace.enter;
+a.defaultOut = [0, 1];   // default output buses for nodes without explicit out
 
 // Simple sine
-~osc = nd { |freq| SinOsc.ar(freq, 0, 0.1) }.out(0).play;
+~osc = nd { |freq| SinOsc.ar(freq, 0, 0.1) }.play;
 
-// Modulation routed via persistent bus
+// Modulation routed via persistent argument bus
 ~lfo = nd { SinOsc.ar(1).range(200, 1200) }.out(~osc[\freq]).play;
 
 // Update the function live — buses remain stable
@@ -264,6 +270,7 @@ Short aliases: `.o`=out, `.f`=fade, `.t`=tag, `.p`=play, `.s`=stop.
 ```supercollider
 // 0. Enter NdMSpace
 a = NdMSpace.enter;
+a.defaultOut = [0, 1];   // set default output buses for this space
 
 // 1. Place the modulator
 ~mod0 = nd { LFNoise1.ar(2).range(0, 1) }.f(5).o(~osc[\mod]).t(\mod);
@@ -272,7 +279,7 @@ a = NdMSpace.enter;
 ~mod1 = nd { LFPulse.ar(10) }.f(5).o(~osc[\mod]).t(\mod);
 
 // 3. Start main voice
-~osc = nd { |mod| SinOsc.ar(mod * 500 + 500) * 0.2 }.f(5).o([0, 1]).p;
+~osc = nd { |mod| SinOsc.ar(mod * 500 + 500) * 0.2 }.f(5).p;
 
 // 4. Start modulators
 a.playTag(\mod);

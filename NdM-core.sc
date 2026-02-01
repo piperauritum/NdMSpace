@@ -90,15 +90,18 @@ NdM : Object {
 	}
 
 	// Entry point: create or reuse an NdM, then set function/outbus.
-	*new { |key, func, outbus|
+	*new { |key, func, outbus, whereIn|
 		var instance;
 		var keySymbol;
 		var result;
 		var hasOld;
 		var outLabel;
 		var debugMessage;
+		var whereLocal;
 		// var monitor1;
 		// var ownerInfo;
+
+		whereLocal = whereIn ? \none;
 
 		// Label outbus for log readability.
 		if(outbus.isNil) {
@@ -128,7 +131,7 @@ NdM : Object {
 			// Ensure the instance is re-registered and sink/edge is restored for this outbus.
 			instance.ensureRegistered(outbus);
 
-			instance.setFunc(func, outbus);
+			instance.setFunc(func, outbus, whereLocal);
 			result = instance;
 			^result;
 		};
@@ -139,7 +142,13 @@ NdM : Object {
 		// debugMessage.postln;
 
 		instance = super.new;
-		instance.init(keySymbol, func, outbus);
+		instance.init(keySymbol, func, outbus, whereLocal);
+
+		/** IMPORTANT: Regardless of whether there is a placeholder or not,
+		'ensureRegistered' and 'setFunc' are always executed as long as NdM.new is passed. **/
+		// Ensure the same side-effects as the reuse path.
+		instance.ensureRegistered(outbus);
+		instance.setFunc(func, outbus, whereLocal);
 
 		// Register the newly created instance into the global table.
 		instances[keySymbol] = instance;
@@ -202,7 +211,7 @@ NdM : Object {
 	}
 
 	// Returns: [busObject, rateSymbol]
-	*resolveArgBus { |keySymbol, argSymbol, serverIn|
+	*resolveArgBus { |keySymbol, argSymbol, serverIn, whereIn, traceIdIn|
 		var monitor;
 		var rateSymbol;
 		var busIndex;
@@ -210,6 +219,15 @@ NdM : Object {
 		var serverLocal;
 		var busObject;
 		var result;
+
+		// --- argbus trace locals ---
+		var spaceLocal;
+		var whereLocal;
+		var auxState;
+		var auxValue;
+		var traceIdLocal;
+
+		traceIdLocal = traceIdIn;
 
 		serverLocal = serverIn;
 		if(serverLocal.isNil) {
@@ -220,6 +238,25 @@ NdM : Object {
 
 		rateSymbol = monitor.recallRate(keySymbol, argSymbol);
 		busIndex = monitor.recallBus(keySymbol, argSymbol);
+
+		// ---- argbus.recall (read-side recall point) ----
+		spaceLocal = NdMSpace.current;
+		whereLocal = whereIn ? \none;
+		auxState = ("arg:" ++ argSymbol.asString).asSymbol;
+		auxValue = if(busIndex.isNil) { -1 } { busIndex };
+
+		if(spaceLocal.notNil) {
+			spaceLocal.tracePush(
+				'argbus.recall',
+				keySymbol,
+				whereLocal,
+				-1,
+				auxState,
+				auxValue,
+				'reason:recall',
+				traceIdLocal
+			);
+		};
 
 		// 1) Existing record wins (both must exist)
 		if(rateSymbol.notNil && busIndex.notNil) {
@@ -251,15 +288,53 @@ NdM : Object {
 			busObject = Bus.audio(serverLocal, 1);
 		};
 
+		// ---- argbus.alloc (read-side alloc point: busIndex is now fixed) ----
+		spaceLocal = NdMSpace.current;
+		whereLocal = whereIn ? \none;
+		auxState = ("arg:" ++ argSymbol.asString).asSymbol;
+		auxValue = if(busObject.isNil) { -1 } { busObject.index };
+
+		if(spaceLocal.notNil) {
+			spaceLocal.tracePush(
+				'argbus.alloc',
+				keySymbol,
+				whereLocal,
+				-1,
+				auxState,
+				auxValue,
+				'reason:alloc',
+				traceIdLocal
+			);
+		};
+
 		monitor.rememberBus(keySymbol, argSymbol, busObject.index);
 		monitor.rememberRate(keySymbol, argSymbol, inferredRate);
+
+		// ---- argbus.remember (read-side remember complete point) ----
+		spaceLocal = NdMSpace.current;
+		whereLocal = whereIn ? \none;
+		auxState = ("arg:" ++ argSymbol.asString).asSymbol;
+		auxValue = if(busObject.isNil) { -1 } { busObject.index };
+
+		if(spaceLocal.notNil) {
+			spaceLocal.tracePush(
+				'argbus.remember',
+				keySymbol,
+				whereLocal,
+				-1,
+				auxState,
+				auxValue,
+				'reason:remember',
+				traceIdLocal
+			);
+		};
 
 		result = [busObject, inferredRate];
 		^result;
 	}
 
 	// Main initializer: setup key, function, argument metadata, and bus allocation.
-	init { |keySymbol, funcIn, outbusIn|
+	init { |keySymbol, funcIn, outbusIn, whereIn|
 		var server;
 		// var monitorLocal;
 		var monitor1;
@@ -267,6 +342,9 @@ NdM : Object {
 		var parsedArgs;
 		var rateLabel;
 		var debugMessage;
+		var whereLocal;
+
+		whereLocal = whereIn ? \none;
 
 		debugMessage =　("[NdM.init] keySymbol: " ++ keySymbol.asString
 			++ "  outbusIn: " ++ outbusIn.asString
@@ -316,6 +394,7 @@ NdM : Object {
 		fadeGap = NdM.fadeGap ?? 0.04;		// Delay between fade start and amp update.
 		hasFadeInit = false;				// Track if initial fade setup has run.
 
+		// Determine default arg-rate (key suffix).
 		keyString = key.asString;
 		keyRate = this.parseKeyRate(keyString);
 
@@ -400,7 +479,7 @@ NdM : Object {
 
 			// Allocate/reuse buses for each argument name (unified rule).
 			argNames.do { |argName|
-				# bus, rate = NdM.resolveArgBus(key, argName, server);
+				# bus, rate = NdM.resolveArgBus(key, argName, server, whereLocal);
 
 				argBuses[argName] = bus;
 				argRates[argName] = rate;
@@ -526,14 +605,20 @@ NdM : Object {
 	}
 
 	// ~car[\mod] -> ~car.bus(\mod)
-	at { |argName|
+	// - whereIn が nil の場合（ユーザが ~osc[\frq] のように 1 引数で呼ぶ経路）は
+	//   \user を既定 where とする。
+	// - 内部コードは whereIn を必ず渡して呼ぶ（補助案C）。
+	at { |argName, whereIn|
 		var argSymbol;
 		var busLocal;
 		var res;
 		var rateSymbol;
 		var serverLocal;
+		var whereLocal;
+		var xr;
 
 		argSymbol = argName.asSymbol;
+		whereLocal = (whereIn ? \user).asSymbol;
 
 		// self-reference guard: while building this key, ~key[\*] is forbidden
 		if((NdM.buildingKey.notNil) && (NdM.buildingKey == key)) {
@@ -546,29 +631,34 @@ NdM : Object {
 		};
 
 		busLocal = this.bus(argSymbol);
+
+		xr = nil;
+
 		if(busLocal.notNil) {
-			^busLocal;
+			xr = busLocal;
+		} {
+			serverLocal = this.getServer;
+
+			// unified resolution (recall both / inconsistent error / infer+remember both)
+			res = NdM.resolveArgBus(key, argSymbol, serverLocal, whereLocal);
+			busLocal = res[0];
+			rateSymbol = res[1];
+
+			// cache into instance maps (so subsequent calls are fast and rate-consistent)
+			if(argBuses.isNil) {
+				argBuses = IdentityDictionary.new;
+			};
+			if(argRates.isNil) {
+				argRates = IdentityDictionary.new;
+			};
+
+			argBuses[argSymbol] = busLocal;
+			argRates[argSymbol] = rateSymbol;
+
+			xr = busLocal;
 		};
 
-		serverLocal = this.getServer;
-
-		// unified resolution (recall both / inconsistent error / infer+remember both)
-		res = NdM.resolveArgBus(key, argSymbol, serverLocal);
-		busLocal = res[0];
-		rateSymbol = res[1];
-
-		// cache into instance maps (so subsequent calls are fast and rate-consistent)
-		if(argBuses.isNil) {
-			argBuses = IdentityDictionary.new;
-		};
-		if(argRates.isNil) {
-			argRates = IdentityDictionary.new;
-		};
-
-		argBuses[argSymbol] = busLocal;
-		argRates[argSymbol] = rateSymbol;
-
-		^busLocal;
+		^xr;
 	}
 
 	// Read argument buses as UGen inputs, respecting their audio/control rate.
@@ -980,7 +1070,7 @@ NdM : Object {
 				};
 			};
 
-			this.updateProxyOut;
+			this.updateProxyOut('reason:outChanged');
 			result = this;
 		};
 
@@ -1088,13 +1178,35 @@ NdM : Object {
 			};
 		};
 
-		this.updateProxyOut;
+		this.updateProxyOut('reason:outChanged');
 	}
 
 	// Rebuild proxy source (to capture updated outbus) without restarting playback.
-	updateProxyOut {
+	updateProxyOut { |reason|
 		var proxyLocal;
 		var proxyFunc;
+		var spaceLocal;
+		var reasonSym;
+
+		spaceLocal = NdMSpace.current;
+
+		reasonSym = reason;
+		if(reasonSym.isNil) {
+			reasonSym = 'reason:none';
+		};
+
+		if(spaceLocal.notNil) {
+			spaceLocal.tracePush(
+				'updateProxyOut.enter',
+				key,
+				\none,
+				reqGen,
+				\none,
+				-1,
+				reasonSym,
+				-1
+			);
+		};
 
 		proxyLocal = proxy;
 		if(proxyLocal.notNil) {
@@ -1103,6 +1215,7 @@ NdM : Object {
 			proxyLocal.source = proxyFunc;
 		};
 	}
+
 
 	// short aliases (live coding convenience)
 

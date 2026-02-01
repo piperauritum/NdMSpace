@@ -1,7 +1,7 @@
 + NdM {
 
 	// Update the function and output routing, reallocating/reusing buses as needed.
-	setFunc { |funcIn, outbusIn|
+	setFunc { |funcIn, outbusIn, whereIn|
 		var serverLocal;
 		var argList;
 		var newArgNames;
@@ -11,9 +11,27 @@
 		var switchLocal;
 		var outTarget;
 		var rawOut;
+		var whereLocal;
 		// var outBusArg;
 		// var ownerInfo;
 		// var ownerNs;
+		var spaceLocal;
+
+		whereLocal = whereIn ? \none;
+
+		spaceLocal = NdMSpace.current;
+		if(spaceLocal.notNil) {
+			spaceLocal.tracePush(
+				'setFunc.enter',
+				key,
+				whereLocal,
+				reqGen,
+				("outbusInClass:" ++ outbusIn.class.asString).asSymbol,
+				-1,
+				\none,
+				-1
+			);
+		};
 
 		// SPEC:
 		// - Update NdM's user function and output routing (outbus), then refresh arg tables and graph registration.
@@ -92,7 +110,7 @@
 			this.debugPost("[NdM setFunc] NdMNameSpace.acquire -> " ++ monitorLocal.asString);
 
 			// --- (1) Allocate or reuse buses for each new argument name (unified rule). ---
-			this.setFuncUpdateArgBuses(newArgNames, newArgRates, serverLocal);
+			this.setFuncUpdateArgBuses(newArgNames, newArgRates, serverLocal, whereLocal);
 
 			// --- (2) Free buses for any argument names that no longer exist. ---
 			this.setFuncFreeRemovedArgBuses(newArgNames);
@@ -153,12 +171,21 @@
 		^this;
 	}
 
-	setFuncUpdateArgBuses { |newArgNames, newArgRates, serverLocal|
+	setFuncUpdateArgBuses { |newArgNames, newArgRates, serverLocal, whereIn|
 		var argItem;
 		var argNameLocal;
 		var busLocal;
 		var rateLocal;
 		var res;
+
+		// --- argbus trace locals ---
+		var spaceLocal;
+		var whereLocal;
+		var auxState;
+		var auxValue;
+
+		spaceLocal = NdMSpace.current;
+		whereLocal = whereIn ? \none;
 
 		newArgNames.do { |item|
 			argItem = item;
@@ -169,7 +196,7 @@
 			// If this NdM instance already has a bus, keep it.
 			// Otherwise resolve via the unified resolver (record wins / inconsistent error / infer+remember both).
 			if(busLocal.isNil) {
-				res = NdM.resolveArgBus(key, argNameLocal, serverLocal);
+				res = NdM.resolveArgBus(key, argNameLocal, serverLocal, whereLocal);
 				busLocal = res[0];
 				rateLocal = res[1];
 
@@ -187,6 +214,23 @@
 				this.debugPost("[NdM setFunc] arg reuse existing bus: " ++ argNameLocal.asString
 					++ "  index: " ++ busLocal.index.asString
 					++ "  rate: " ++ rateLocal.asString);
+			};
+
+			// ---- argbus.use.read (reader-side use point: busIndex is now fixed for this argName) ----
+			if(spaceLocal.notNil) {
+				auxState = ("arg:" ++ argNameLocal.asString).asSymbol;
+				auxValue = if(busLocal.isNil) { -1 } { busLocal.index };
+
+				spaceLocal.tracePush(
+					'argbus.use.read',
+					key,
+					whereLocal,
+					reqGen,
+					auxState,
+					auxValue,
+					'reason:use',
+					nil
+				);
 			};
 		};
 
@@ -260,6 +304,10 @@
 	}
 
 	setFuncRequestApplyKick { |switchLocal|
+		var proxyLocal;
+		var isPlayingLocal;
+		var nodeIdLocal;
+
 		// Cancel pending free if user redefines/plays again.
 		wantFree = false;
 
@@ -268,6 +316,20 @@
 
 		reqGen = reqGen + 1;
 		this.debugPost("[NdM setFunc] requested apply  gen=" ++ reqGen.asString);
+
+		proxyLocal = proxy;
+		isPlayingLocal = false;
+		nodeIdLocal = nil;
+		if(proxyLocal.notNil) {
+			isPlayingLocal = proxyLocal.isPlaying;
+			try { nodeIdLocal = proxyLocal.nodeID; } { nodeIdLocal = nil; };
+		};
+		this.debugPost(
+			"[NdM setFunc] proxyState key=" ++ key.asString
+			++ " running=" ++ running.asString
+			++ " isPlaying=" ++ isPlayingLocal.asString
+			++ " nodeID=" ++ nodeIdLocal.asString
+		);
 
 		this.applyKick;
 

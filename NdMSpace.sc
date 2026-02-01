@@ -177,10 +177,65 @@ NdMSpace : LazyEnvir {
 	// This is for NdMSpace-level logs (e.g. [DBG][GRAPH]/[DBG][SPACE]).
 	var <>spaceDbgValue;
 
+	// New: coalesce dbg propagation into one tick (apply to existing NdM instances).
+	var dbgApplyPending;
+	var dbgApplyValue;
+	var dbgApplyScheduled;
+
 	// Task3/4: coalesce graph rebuild requests into one tick.
 	var graphApplyPending;
 	var graphApplyRunning;
 	var graphApplyRerun;
+
+	// TEST HOOK (T2 only): extend visible running window by sched/yield (default 0.0).
+	var <>graphApplyTestHoldSec;
+
+	// --------------------------------------------------------------------
+	// TRACE (provisional): execution path capture as an ordered list.
+	//
+	// SPEC:
+	// - traceList is an Array (order is the only source of truth).
+	// - each row is a Dictionary with fixed keys (seq/traceId/threadId/tag/key/where/reqGen/auxState/auxValue/auxReason).
+	// - Array.add returns a new Array, so traceList must be reassigned.
+	//
+	// WHERE VOCABULARY (fixed):
+	// - \user                : invoked directly by user code
+	// - \spec_play_mark      : NdMSpaceSpec.play marked autoPlay
+	// - \spec_play_setFunc   : setFunc applied in spec.play context
+	// - \putFromSpec         : during putFromSpec execution
+	// - \putFromSpec_autoPlay: autoPlay consumption point
+	// - \dbg_scan            : during NdMSpace.dbg scan
+	// - \dbg_delta           : triggered by NdM.dbg old/new delta
+	//
+	// Future class API (NdMTrace) - must match current helper semantics:
+	// - reset()
+	//     - clears traceList and counters (traceSeq/traceIdNext/traceActiveId)
+	// - begin(where, key=\none, reqGen=-1, auxState=\none, auxValue=-1, auxReason=\none) -> traceId
+	//     - starts an execution unit and returns traceId (maps to traceBegin)
+	// - push(tag, key=\none, where=\none, reqGen=-1, auxState=\none, auxValue=-1, auxReason=\none, traceId=nil)
+	//     - appends one checkpoint row (maps to tracePush)
+	// - end(traceId=nil, where=\none, key=\none, reqGen=-1, auxState=\none, auxValue=-1, auxReason=\none)
+	//     - ends an execution unit (maps to traceEnd)
+	// - dump(traceId=nil)
+	//     - human-readable dump (all rows or rows filtered by traceId)
+	// - slice(traceId)
+	//     - returns rows (Array) filtered by traceId for comparison
+	//
+	// Note:
+	// - This is intentionally implemented as NdMSpace fields + helpers (minimal).
+	// - Future work: split into a dedicated class (e.g. NdMTrace) once checkpoints stabilize.
+
+	// New: NdMTrace instance (Phase B). Wrapper methods will delegate in later phases.
+	var traceObj;
+
+	// Toggle: whether NdMSpace uses NdMTrace (delegate target) or legacy fields only.
+	// - Provide both getter and setter (traceUseObj / traceUseObj_).
+	var <>traceUseObj;
+
+	// Default out-bus (used only when specObj.outBus is nil and oldVal is not an NdM).
+	// Types: nil / Integer / Array(Integer) / Bus
+	var defaultOutValue;
+
 
 	// --------------------------------------------------------------------
 	// Frontend: global NdM control
@@ -395,42 +450,48 @@ NdMSpace : LazyEnvir {
 	// a.dbg;        // -> Boolean (default: false when nil)
 	dbg { |value|
 		var flag;
-		var table;
+		var xres;
+
+		var traceId = this.traceBegin(\dbg, \none, -1, \none, -1, \none);
+		this.tracePush('space.dbg.enter', \none, \dbg, -1, ("value:" ++ value.asString).asSymbol, -1, \none, traceId);
+		this.traceEnd(traceId, \dbg, \none, -1, \none, -1, \none);
+
+		xres = this;
 
 		// getter: return space log flag (default: false when nil)
 		if(value.isNil) {
-			^(spaceDbgValue ? false);
-		};
-
-		// setter: same normalization rule as NdM.dbg
-		if(value.isNumber) {
-			flag = (value > 0);
+			xres = (spaceDbgValue ? false);
 		} {
-			flag = (value == true);
-		};
-
-		// 1) store for NdM propagation
-		lastDbgValue = flag;
-
-		// 2) store for NdMSpace-owned logs
-		spaceDbgValue = flag;
-
-		// Apply to existing NdM instances immediately (so T1 works).
-		table = NdM.instances;
-		if(table.notNil) {
-			table.values.do { |ndmInstance|
-				if(ndmInstance.notNil) {
-					ndmInstance.dbg(flag);
-				};
+			// setter: same normalization rule as NdM.dbg
+			if(value.isNumber) {
+				flag = (value > 0);
+			} {
+				flag = (value == true);
 			};
+
+			// 1) store for NdM propagation
+			lastDbgValue = flag;
+
+			// 2) store for NdMSpace-owned logs
+			spaceDbgValue = flag;
+
+			// 3) defer propagation to existing NdM instances (coalesce to next tick)
+			dbgApplyPending = true;
+			dbgApplyValue = flag;
+			this.scheduleApplyDbg;
+
+			xres = this;
 		};
 
-		^this;
+		^xres;
 	}
 
 	dbg_ { |value|
 		var flag;
-		var table;
+
+		var traceId = this.traceBegin(\dbg_, \none, -1, \none, -1, \none);
+		this.tracePush('space.dbg_.enter', \none, \dbg_, -1, ("value:" ++ value.asString).asSymbol, -1, \none, traceId);
+		this.traceEnd(traceId, \dbg_, \none, -1, \none, -1, \none);
 
 		// setter: same normalization rule as NdM.dbg
 		if(value.isNumber) {
@@ -445,7 +506,27 @@ NdMSpace : LazyEnvir {
 		// 2) store for NdMSpace-owned logs
 		spaceDbgValue = flag;
 
-		// Apply to existing NdM instances immediately.
+		// 3) defer propagation to existing NdM instances (coalesce to next tick)
+		dbgApplyPending = true;
+		dbgApplyValue = flag;
+		this.scheduleApplyDbg;
+
+		^this;
+	}
+
+	// New: apply pending dbg propagation to existing NdM instances (scheduled by dbg setter).
+	applyDbgPending {
+		var table;
+		var flag;
+
+		if(dbgApplyPending.not) {
+			dbgApplyScheduled = false;
+			^this;
+		};
+
+		// keep the latest flag (Boolean)
+		flag = dbgApplyValue;
+
 		table = NdM.instances;
 		if(table.notNil) {
 			table.values.do { |ndmInstance|
@@ -454,6 +535,39 @@ NdMSpace : LazyEnvir {
 				};
 			};
 		};
+
+		// close pending state
+		dbgApplyPending = false;
+		dbgApplyValue = nil;
+		dbgApplyScheduled = false;
+
+		^this;
+	}
+
+	// New: schedule dbg propagation once on the next tick (prevent multi-sched).
+	// NOTE: expects applyDbgPending to exist (step 3).
+	scheduleApplyDbg {
+		var space;
+		var doSchedule;
+
+		space = this;
+		doSchedule = false;
+
+		if((dbgApplyPending == true) && (dbgApplyScheduled == false)) {
+			dbgApplyScheduled = true;
+			doSchedule = true;
+		};
+
+		if(doSchedule == true) {
+			// SystemClock.sched(0.0, {
+			if(space.notNil) {
+				space.applyDbgPending;
+			};
+			// nil;
+			// });
+		};
+
+		^this;
 	}
 
 	debugPost { |msgFunc|
@@ -475,6 +589,153 @@ NdMSpace : LazyEnvir {
 		};
 
 		^this;
+	}
+
+	// --------------------------------------------------------------------
+	// TRACE (provisional): NdMSpace fields + helpers (minimal implementation).
+	// Future: split into a dedicated class (e.g. NdMTrace) once checkpoints stabilize.
+	// --------------------------------------------------------------------
+
+	traceReset {
+		var useObj;
+
+		useObj = traceUseObj ? true;
+
+		if(useObj == true) {
+			if(traceObj.isNil) {
+				traceObj = NdMTrace.new;
+			};
+			traceObj.reset;
+		} {
+			traceObj = nil;
+		};
+
+		^this;
+	}
+
+	traceBegin { |whereIn, keyIn, reqGenIn, auxStateIn, auxValueIn, auxReasonIn|
+		var where;
+		var key;
+		var reqGen;
+		var auxState;
+		var auxValue;
+		var auxReason;
+		var traceId;
+		var useObj;
+
+		where = whereIn ? \none;
+		key = keyIn ? \none;
+		reqGen = reqGenIn ? -1;
+		auxState = auxStateIn ? \none;
+		auxValue = auxValueIn ? -1;
+		auxReason = auxReasonIn ? \none;
+
+		useObj = traceUseObj ? true;
+
+		if(useObj == true) {
+			if(traceObj.isNil) {
+				traceObj = NdMTrace.new;
+				traceObj.reset;
+			};
+			traceId = traceObj.begin(where, key, reqGen, auxState, auxValue, auxReason);
+		} {
+			traceId = -1;
+		};
+
+		^traceId;
+	}
+
+	traceEnd { |traceIdIn, whereIn, keyIn, reqGenIn, auxStateIn, auxValueIn, auxReasonIn|
+		var where;
+		var key;
+		var reqGen;
+		var auxState;
+		var auxValue;
+		var auxReason;
+		var useObj;
+
+		where = whereIn ? \none;
+		key = keyIn ? \none;
+		reqGen = reqGenIn ? -1;
+		auxState = auxStateIn ? \none;
+		auxValue = auxValueIn ? -1;
+		auxReason = auxReasonIn ? \none;
+
+		useObj = traceUseObj ? true;
+
+		if(useObj == true) {
+			if(traceObj.isNil) {
+				traceObj = NdMTrace.new;
+				traceObj.reset;
+			};
+			traceObj.end(traceIdIn, where, key, reqGen, auxState, auxValue, auxReason);
+		};
+
+		^this;
+	}
+
+	tracePush { |tagIn, keyIn, whereIn, reqGenIn, auxStateIn, auxValueIn, auxReasonIn, traceIdIn|
+		var tag;
+		var key;
+		var where;
+		var reqGen;
+
+		var auxState;
+		var auxValue;
+		var auxReason;
+
+		var useObj;
+
+		tag = tagIn ? \none;
+		key = keyIn ? \none;
+		where = whereIn ? \none;
+		reqGen = reqGenIn ? -1;
+
+		auxState = auxStateIn ? \none;
+		auxValue = auxValueIn ? -1;
+		auxReason = auxReasonIn ? \none;
+
+		useObj = traceUseObj ? true;
+
+		if(useObj == true) {
+			if(traceObj.isNil) {
+				traceObj = NdMTrace.new;
+				traceObj.reset;
+			};
+			traceObj.push(tag, key, where, reqGen, auxState, auxValue, auxReason, traceIdIn);
+		};
+
+		^this;
+	}
+
+	traceSlice { |traceIdIn|
+		var rows;
+		var useObj;
+
+		rows = Array.new;
+		useObj = traceUseObj ? true;
+
+		if((useObj == true) && traceObj.notNil) {
+			rows = traceObj.slice(traceIdIn);
+		} {
+			rows = Array.new;
+		};
+
+		^rows;
+	}
+
+	traceDump { |traceIdIn|
+		var rows;
+		var useObj;
+
+		rows = Array.new;
+		useObj = traceUseObj ? true;
+
+		if((useObj == true) && traceObj.notNil) {
+			rows = traceObj.dump(traceIdIn);
+		};
+
+		rows;
 	}
 
 	exit {
@@ -580,9 +841,27 @@ NdMSpace : LazyEnvir {
 		server = srv;
 		lastDbgValue = nil;
 		spaceDbgValue = nil;
+
+		dbgApplyPending = false;
+		dbgApplyValue = nil;
+		dbgApplyScheduled = false;
+
 		graphApplyPending = false;
 		graphApplyRunning = false;
 		graphApplyRerun = false;
+		graphApplyTestHoldSec = 0.0;
+
+		// TRACE: delegate target (NdMTrace) only. Legacy trace fields are removed.
+		// Toggle default: ON (use NdMTrace).
+		traceUseObj = true;
+
+		// Phase B: prepare delegate target (NdMTrace).
+		if(traceUseObj == true) {
+			traceObj = NdMTrace.new;
+			traceObj.reset;
+		} {
+			traceObj = nil;
+		};
 
 		oldGrp = spaceGroup;
 		if(oldGrp.notNil) {
@@ -602,6 +881,17 @@ NdMSpace : LazyEnvir {
 		var monitor;
 		var res;
 		var activeKeys;
+
+		this.tracePush(
+			'graphRebuildOrderInfo.enter',
+			\none,
+			\graphRebuildOrderInfo,
+			-1,
+			("activeKeysIn.nil:" ++ activeKeysIn.isNil.asString).asSymbol,
+			-1,
+			\none,
+			nil
+		);
 
 		monitor = this.graphMonitor;
 		if(monitor.isNil) {
@@ -633,20 +923,14 @@ NdMSpace : LazyEnvir {
 		var delayEnd;
 
 		monitor = NdMNameSpace.instance;
+
 		if(monitor.isNil) {
-			// [2-C] 「試みない」理由：monitor が無い
-			this.debugPost { "[DBG][GRAPH][TRY] decision=skip monitor=nil" };
 			^nil;
 		};
 
 		if(monitor.graphDirtyValue.not) {
-			// [2-C] 「試みない」理由：dirty=false
-			this.debugPost { "[DBG][GRAPH][TRY] decision=skip dirty=false" };
 			^nil;
 		};
-
-		// [2-C] 「試みる」開始点：dirty=true のため実際に rebuild を実行する
-		this.debugPost { "[DBG][GRAPH][TRY] decision=try dirty=true" };
 
 		activeKeys = this.graphRebuildCollectActiveKeys(envir);
 
@@ -656,12 +940,11 @@ NdMSpace : LazyEnvir {
 		res = this.graphRebuildComputeOrderWithLogs(monitor, activeKeys, dbgOrder);
 		order = this.graphRebuildResolveOrderOrAbort(monitor, res);
 		if(order.isNil) {
-			// [2-C] 「試みた」結果：order=nil（feedback 等で abort）
-			this.debugPost { "[DBG][GRAPH][TRY] result=abort order=nil" };
 			^nil;
 		};
 
 		# kickKeys, kickNdms = this.graphRebuildMakeKickPlan(order, envir, dbgOrder);
+
 		delayEnd = this.graphRebuildScheduleKicks(kickNdms, kickKeys, dbgOrder);
 		this.graphRebuildScheduleObserveAfterKicks(delayEnd, order, kickNdms, spaceGroup, dbgOrder);
 
@@ -672,15 +955,23 @@ NdMSpace : LazyEnvir {
 		// Fix: dirty clear is done in graphRebuildScheduleObserveAfterKicks (async tail),
 		// after proxy group reordering is applied on the server.
 
-		// [2-C] 「試みた」結果：order を返す（成功/失敗判定は非対象）
-		this.debugPost { "[DBG][GRAPH][TRY] result=order size=" ++ order.size.asString };
-
 		^order;
 	}
 
 	graphRebuildCollectActiveKeys { |envirLocal|
 		var activeKeys;
 		activeKeys = Array.new;
+
+		this.tracePush(
+			'graphRebuildCollectActiveKeys.enter',
+			\none,
+			\graphRebuildCollectActiveKeys,
+			-1,
+			("envir.nil:" ++ envirLocal.isNil.asString).asSymbol,
+			-1,
+			\none,
+			nil
+		);
 
 		envirLocal.keysValuesDo { |kk, vv|
 			if(vv.isKindOf(NdM)) {
@@ -695,6 +986,19 @@ NdMSpace : LazyEnvir {
 		var res;
 		var activeStr;
 		var orderStr;
+
+		this.tracePush(
+			'graphRebuildComputeOrderWithLogs.enter',
+			\none,
+			\graphRebuildComputeOrderWithLogs,
+			-1,
+			("monitor.nil:" ++ monitor.isNil.asString
+				++ " activeKeys.size:" ++ activeKeys.size.asString
+				++ " dbgOrder:" ++ dbgOrder.asString).asSymbol,
+			-1,
+			\none,
+			nil
+		);
 
 		res = monitor.computeRebuildOrder(activeKeys);
 
@@ -721,6 +1025,18 @@ NdMSpace : LazyEnvir {
 		var prevSig;
 		var sigSame;
 		var sortedMissing;
+
+		this.tracePush(
+			'graphRebuildResolveOrderOrAbort.enter',
+			\none,
+			\graphRebuildResolveOrderOrAbort,
+			-1,
+			("monitor.nil:" ++ monitor.isNil.asString
+				++ " res.class:" ++ res.class.asString).asSymbol,
+			-1,
+			\none,
+			nil
+		);
 
 		order = nil;
 
@@ -760,6 +1076,31 @@ NdMSpace : LazyEnvir {
 		var kickKeys;
 		var kickNdms;
 
+		var isPlayFlag;
+		var skipReason;
+
+		var proxyClsStr;
+		var hasNodeId;
+		var hasIsPlaying;
+		var isPlayStr;
+
+		var snap;
+		var runVal;
+
+		this.tracePush(
+			'graphRebuildMakeKickPlan.enter',
+			\none,
+			\graphRebuildMakeKickPlan,
+			-1,
+			("order.size:" ++ order.size.asString
+				++ " dbgOrder:" ++ dbgOrder.asString).asSymbol,
+			-1,
+			\none,
+			nil
+		);
+
+		this.debugPost { "[DBG][GRAPH] makeKickPlan begin" };
+
 		kickKeys = Array.new;
 		kickNdms = Array.new;
 
@@ -773,28 +1114,174 @@ NdMSpace : LazyEnvir {
 			ndmObj = envirLocal.at(k);
 			if(ndmObj.isKindOf(NdM)) {
 				proxyObj = ndmObj.proxy;
-				if((proxyObj.notNil) && (proxyObj.isPlaying)) {
+
+				isPlayFlag = false;
+				skipReason = "unknown";
+
+				proxyClsStr = "nil";
+				hasNodeId = false;
+				hasIsPlaying = false;
+				isPlayStr = "nil";
+
+				if(proxyObj.isNil) {
+					skipReason = "proxyNil";
+				} {
+					proxyClsStr = proxyObj.class.asString;
+
+					hasIsPlaying = proxyObj.respondsTo(\isPlaying);
+					if(hasIsPlaying) {
+						isPlayFlag = proxyObj.isPlaying;
+						isPlayStr = isPlayFlag.asString;
+					} {
+						isPlayFlag = false;
+						isPlayStr = "noMethod";
+					};
+
+					if(isPlayFlag) {
+						skipReason = "playing";
+					} {
+						skipReason = "notPlaying";
+					};
+				};
+
+				// optional: nodeID if available (also for skip log)
+				nodeIdStr = "";
+				nodeIdVal = nil;
+				if(proxyObj.notNil) {
+					hasNodeId = proxyObj.respondsTo(\nodeID);
+
+					if(hasNodeId) {
+						try {
+							nodeIdVal = proxyObj.nodeID;
+						} {
+							nodeIdVal = nil;
+						};
+					};
+
+					this.tracePush(
+						'proxy.read.makeKickPlan',
+						k,
+						\graphRebuildMakeKickPlan,
+						-1,
+						("proxy.class:" ++ proxyClsStr
+							++ " isPlaying:" ++ isPlayStr
+							++ " nodeID:" ++ nodeIdVal.asString
+							++ " snap.running:" ++ runVal.asString).asSymbol,
+						-1,
+						'reason:makeKickPlan.read',
+						nil
+					);
+				};
+				if(nodeIdVal.notNil) {
+					nodeIdStr = (" nodeID=" ++ nodeIdVal.asString);
+				} {
+					if(hasNodeId) {
+						nodeIdStr = " nodeID=nil";
+					} {
+						nodeIdStr = " nodeID=noMethod";
+					};
+				};
+
+				// kick-check log (before if(isPlayFlag))
+				runVal = false;
+
+				if(dbgOrder) {
+					var reqVal;
+					var wantVal;
+					var playVal;
+					var nodeVal;
+
+					snap = nil;
+
+					reqVal = "nil";
+					wantVal = "nil";
+					playVal = "nil";
+					nodeVal = "nil";
+
+					try {
+						snap = ndmObj.kickSnapshot;
+					} {
+						snap = nil;
+					};
+
+					if(snap.notNil) {
+						runVal = snap.at(\running);
+						reqVal = snap.at(\reqGen);
+						wantVal = snap.at(\wantPlay);
+						playVal = snap.at(\isPlaying);
+						nodeVal = snap.at(\nodeID);
+					};
+
+					// normalize runVal to Boolean
+					if(runVal.isNumber) {
+						runVal = (runVal > 0);
+					} {
+						runVal = (runVal == true);
+					};
+
+
+					("[DBG][GRAPH] kick(check) [" ++ k.asString ++ "] "
+						++ "snapId=" ++ snap.identityHash.asString
+						++ " running=" ++ runVal.asString
+						++ " reqGen=" ++ reqVal.asString
+						++ " wantPlay=" ++ wantVal.asString
+						++ " isPlaying=" ++ playVal.asString
+						++ " nodeID=" ++ nodeVal.asString
+					).postln;
+
+
+					if(snap.notNil) {
+						this.debugPost {
+							"[DBG][GRAPH] kick(snapKeys) [" ++ k.asString ++ "]"
+							++ " keys=" ++ snap.keys.asString
+						};
+
+						snap.keysValuesDo { |kk, vv|
+							this.debugPost {
+								"[DBG][GRAPH] kick(snapKV) [" ++ k.asString ++ "]"
+								++ " " ++ kk.asString
+								++ "=" ++ vv.asString
+								++ " class=" ++ vv.class.asString
+							};
+						};
+					} {
+						this.debugPost {
+							"[DBG][GRAPH] kick(snapKeys) [" ++ k.asString ++ "] snap=nil"
+						};
+					};
+
+					// NEW: evaluate actual plan condition (proxy.isPlaying || snap.running)
+					this.debugPost {
+						"[DBG][GRAPH] kick(eval) [" ++ k.asString ++ "]"
+						++ " proxy.isPlaying=" ++ isPlayFlag.asString
+						++ " snap.running=" ++ runVal.asString
+						++ " => plan=" ++ ((isPlayFlag || runVal)).asString
+					};
+				};
+
+				if(isPlayFlag || runVal) {
 
 					// record actual kick order
 					kickKeys = kickKeys.add(k);
 					kickNdms = kickNdms.add(ndmObj);
 
-					// optional: nodeID if available
-					nodeIdStr = "";
-					nodeIdVal = nil;
-					try {
-						nodeIdVal = proxyObj.nodeID;
-					} {
-						nodeIdVal = nil;
-					};
-					if(nodeIdVal.notNil) {
-						nodeIdStr = (" nodeID=" ++ nodeIdVal.asString);
-					};
-
 					this.debugPost { "[DBG][GRAPH] kick(plan) [" ++ k.asString ++ "]" ++ nodeIdStr };
+
+				} {
+					if(dbgOrder) {
+						this.debugPost {
+							"[DBG][GRAPH] kick(skip) [" ++ k.asString ++ "]"
+							++ " reason=" ++ skipReason
+							++ " proxy.class=" ++ proxyClsStr
+							++ " isPlaying=" ++ isPlayStr
+							++ nodeIdStr
+						};
+					};
 				};
 			};
 		};
+
+		this.debugPost { "[DBG][GRAPH] makeKickPlan end" };
 
 		^ [ kickKeys, kickNdms ];
 	}
@@ -803,6 +1290,19 @@ NdMSpace : LazyEnvir {
 		var kickStr;
 		var delayEnd;
 		var space;
+
+		this.tracePush(
+			'graphRebuildScheduleKicks.enter',
+			\none,
+			\graphRebuildScheduleKicks,
+			-1,
+			("kickKeys.size:" ++ kickKeys.size.asString
+				++ " kickNdms.size:" ++ kickNdms.size.asString
+				++ " dbgOrder:" ++ dbgOrder.asString).asSymbol,
+			-1,
+			\none,
+			nil
+		);
 
 		space = this;
 		delayEnd = 0.0;
@@ -927,8 +1427,26 @@ NdMSpace : LazyEnvir {
 		var proxyObj;
 		var space;
 
+		var traceId;
+		var auxState;
+		var auxValue;
+
+		traceId = this.traceBegin(\graphRebuildScheduleObserveAfterKicks, \none, -1, \none, -1, \none);
+		this.tracePush(
+			'graph.observeAfterKicks.enter',
+			\none,
+			\graphRebuildScheduleObserveAfterKicks,
+			-1,
+			("delayEnd:" ++ delayEnd.asString).asSymbol,
+			-1,
+			\none,
+			traceId
+		);
+
 		space = this;
 		monitor = NdMNameSpace.instance;
+
+		traceId = this.traceBegin(\graphRebuildScheduleObserveAfterKicks, \none, -1, \none, -1, \none);
 
 		SystemClock.sched(delayEnd, {
 			var reorderOk;
@@ -1022,11 +1540,20 @@ NdMSpace : LazyEnvir {
 			// Release the "running" guard here (async tail reached).
 			graphApplyRunning = false;
 
+			auxState = ("pending:" ++ graphApplyPending.asString
+				++ " running:" ++ graphApplyRunning.asString
+				++ " rerun:" ++ graphApplyRerun.asString).asSymbol;
+			auxValue = this.identityHash;
+
+			this.tracePush('graph.run.endTail', \none, \graphRebuildScheduleObserveAfterKicks, -1, auxState, auxValue, 'reason:endTail', traceId);
+
 			// If requests arrived during running, fold them into one rerun.
 			if(graphApplyRerun) {
 				graphApplyRerun = false;
-				this.requestGraphRebuild;
+				this.requestGraphRebuildFrom(\graphRebuildScheduleObserveAfterKicks);
 			};
+
+			space.traceEnd(traceId, \graphRebuildScheduleObserveAfterKicks, \none, -1, \none, -1, \none);
 
 			nil
 		});
@@ -1080,44 +1607,40 @@ NdMSpace : LazyEnvir {
 		^this;
 	}
 
-	requestGraphRebuild {
-		var doStart;
+	/*** Direct call to runNow → Move to next tick sched ***/
+	graphApplyRunTick {
 		var res;
+		var holdSec;
+		var doRebuild;
 
-		// [2-C] 判定ログ（第三者が「試みた／試みない」をログだけで判断できる最小情報）
-		this.debugPost { "[DBG][GRAPH][REQ] pending=" ++ graphApplyPending.asString
-			++ " running=" ++ graphApplyRunning.asString
-			++ " rerun=" ++ graphApplyRerun.asString };
+		var traceId;
+		var auxState;
+		var auxValue;
 
-		// If a rebuild is already running, fold requests into one rerun.
-		// pending は「同一tickのsched抑止」専用にし、running 中の再要求は rerun に集約する。
-		if(graphApplyRunning) {
-			graphApplyRerun = true;
+		res = nil;
 
-			// [2-C] 「試みない」理由：running 中なので rerun へ畳み込み
-			this.debugPost { "[DBG][GRAPH][REQ] decision=foldToRerun" };
+		// SPEC (Pending consumption point):
+		// - graphApplyPending = false is the *only* pending consumption point.
+		// - MUST NOT move this reset into requestGraphRebuild (or any other method).
+		// - If pending is consumed on the request side, the pending hold duration becomes zero,
+		//   breaking same-tick coalescing and causing T1 to FAIL.
+		// Consume the scheduled flag; from here, pending is false (next call can schedule/run again).
+		graphApplyPending = false;
 
-			^this;
-		};
+		// Start running; rerun collects requests that arrive while running.
+		graphApplyRunning = true;
+		graphApplyRerun = false;
 
-		// If a rebuild is already scheduled for this tick, do nothing.
-		doStart = (graphApplyPending == false);
-		if(doStart) {
-			graphApplyPending = true;
+		auxState = ("pending:" ++ graphApplyPending.asString
+			++ " running:" ++ graphApplyRunning.asString
+			++ " rerun:" ++ graphApplyRerun.asString).asSymbol;
+		auxValue = this.identityHash;
 
-			// [2-C] 「試みる」入口：この呼び出しで即時実行（sched に依存しない）
-			this.debugPost { "[DBG][GRAPH][REQ] decision=runNow" };
+		traceId = this.traceBegin(\graphApplyRunTick, \none, -1, \none, -1, \none);
+		this.tracePush('graph.run.beforeRebuild', \none, \graphApplyRunTick, -1, auxState, auxValue, 'reason:state', traceId);
+		this.traceEnd(traceId, \graphApplyRunTick, \none, -1, \none, -1, \none);
 
-			// Consume the scheduled flag; from here, pending is false (next call can schedule/run again).
-			graphApplyPending = false;
-
-			// Start running; rerun collects requests that arrive while running.
-			graphApplyRunning = true;
-			graphApplyRerun = false;
-
-			// [2-C] 実行開始（ここから rebuildGraphIfDirty を呼ぶ）
-			this.debugPost { "[DBG][GRAPH][RUN] start" };
-
+		doRebuild = {
 			res = this.rebuildGraphIfDirty;
 
 			// If rebuildGraphIfDirty returned nil, no async tail is expected.
@@ -1125,19 +1648,139 @@ NdMSpace : LazyEnvir {
 			if(res.isNil) {
 				graphApplyRunning = false;
 
-				this.debugPost { "[DBG][GRAPH][RUN] endImmediate rerun=" ++ graphApplyRerun.asString };
+				auxState = ("pending:" ++ graphApplyPending.asString
+					++ " running:" ++ graphApplyRunning.asString
+					++ " rerun:" ++ graphApplyRerun.asString).asSymbol;
+				auxValue = this.identityHash;
+
+				traceId = this.traceBegin(\graphApplyRunTick, \none, -1, \none, -1, \none);
+				this.tracePush('graph.run.endImmediate', \none, \graphApplyRunTick, -1, auxState, auxValue, 'reason:endImmediate', traceId);
 
 				if(graphApplyRerun) {
+					this.tracePush('graph.req.rerun', \none, \graphApplyRunTick, -1, 'caller:graphApplyRunTick', auxValue, 'reason:rerun', traceId);
+
 					graphApplyRerun = false;
 					this.requestGraphRebuild;
 				};
+
+				this.traceEnd(traceId, \graphApplyRunTick, \none, -1, \none, -1, \none);
 			};
+
+			nil
+		};
+
+		// TEST HOOK (T2 only): extend running window WITH yield (no busy-wait).
+		// - Keep graphApplyRunning=true during holdSec.
+		// - Allow external requestGraphRebuild to enter with running=true.
+		holdSec = graphApplyTestHoldSec;
+		if(holdSec.notNil && (holdSec > 0.0)) {
+			SystemClock.sched(holdSec, {
+				doRebuild.()
+			});
 		} {
-			// [2-C] 「試みない」理由：同一 tick で既に pending（sched 済み）
-			this.debugPost { "[DBG][GRAPH][REQ] decision=skipAlreadyPending" };
+			doRebuild.()
 		};
 
 		^this
+	}
+
+	requestGraphRebuild {
+		^this.requestGraphRebuildFrom(\none);
+	}
+
+	requestGraphRebuildFrom { |whereIn|
+		^this.requestGraphRebuildWithWhere(whereIn);
+	}
+
+	requestGraphRebuildWithWhere { |whereIn|
+		var doStart;
+		var xresult;
+
+		// [STEP2] migrate [TRACE][GRAPH][REQ] logs into [ROW] via tracePush
+		var traceId;
+		var pVal;
+		var rVal;
+		var rrVal;
+		var hVal;
+		var auxState;
+		var auxReason;
+
+		var whereLocal;
+
+		// SPEC (Boundary contract):
+		// - Responsibility is limited to:
+		//   (1) state check  : graphApplyRunning / graphApplyPending
+		//   (2) state update : graphApplyPending / graphApplyRerun
+		//   (3) scheduling   : SystemClock.sched(...) to graphApplyRunTick
+		// - This method MUST NOT execute rebuild:
+		//   - MUST NOT call rebuildGraphIfDirty (directly or indirectly).
+		// - graphApplyPending = false is consumed only at the beginning of graphApplyRunTick.
+		//   - requestGraphRebuild MUST NOT reset graphApplyPending to false.
+		// - graphApplyRunning is owned by graphApplyRunTick / async tail only.
+		//   - requestGraphRebuild MUST NOT set graphApplyRunning true/false.
+
+		whereLocal = whereIn ? \none;
+
+		xresult = this;
+		doStart = false;
+
+		traceId = this.traceBegin(whereLocal, \none, -1, \none, -1, \none);
+
+		// entrance snapshot -> [ROW]
+		pVal = 0;
+		rVal = 0;
+		rrVal = 0;
+
+		if(graphApplyPending) { pVal = 1; };
+		if(graphApplyRunning) { rVal = 1; };
+		if(graphApplyRerun) { rrVal = 1; };
+
+		hVal = this.identityHash;
+
+		this.tracePush('graph.req.received', \none, whereLocal, -1, \none, -1, \none, traceId);
+
+		this.tracePush('graph.req.pending', \none, whereLocal, -1, \none, pVal, 'reason:state', traceId);
+		this.tracePush('graph.req.running', \none, whereLocal, -1, \none, rVal, 'reason:state', traceId);
+		this.tracePush('graph.req.rerun',   \none, whereLocal, -1, \none, rrVal, 'reason:state', traceId);
+
+		this.tracePush('graph.req.thisHash', \none, whereLocal, -1, \none, hVal, 'reason:identity', traceId);
+
+		// Branch A: running -> fold to rerun (no sched)
+		if(graphApplyRunning) {
+			graphApplyRerun = true;
+
+			auxState = ("pending:" ++ graphApplyPending.asString
+				++ " running:" ++ graphApplyRunning.asString
+				++ " rerun:" ++ graphApplyRerun.asString).asSymbol;
+			auxReason = 'reason:foldToRerun';
+
+			this.tracePush('decision.foldToRerun', \none, whereLocal, -1, auxState, hVal, auxReason, traceId);
+
+		} {
+			// Branch B: pending -> keep pending (no sched)
+			if(graphApplyPending) {
+
+				this.tracePush('decision.skipAlreadyPending', \none, whereLocal, -1, \none, hVal, 'reason:alreadyPending', traceId);
+
+			} {
+				// Branch C: first -> set pending + schedule runTick
+				doStart = true;
+
+				auxState = ("doStart:" ++ doStart.asString).asSymbol;
+				this.tracePush('graph.req.doStart', \none, whereLocal, -1, auxState, hVal, 'reason:first', traceId);
+
+				graphApplyPending = true;
+
+				SystemClock.sched(0.0, {
+					this.graphApplyRunTick;
+					nil
+				});
+			};
+		};
+
+		this.traceEnd(traceId, whereLocal, \none, -1, \none, -1, \none);
+
+		^xresult
 	}
 
 	graphObserveSpaceGroupTree { |delaySecIn|
@@ -1221,6 +1864,23 @@ NdMSpace : LazyEnvir {
 		var dbgLocal;
 		var monitor;
 		var dirtyNow;
+		var traceId;
+
+		// --- argbus trace locals ---
+		var auxState;
+		var auxValue;
+
+		traceId = this.traceBegin(\putFromSpec, key, -1, \none, -1, \none);
+		this.tracePush(
+			'putFromSpec.enter',
+			key,
+			\putFromSpec,
+			-1,
+			("oldValClass:" ++ oldVal.class.asString).asSymbol,
+			-1,
+			\none,
+			traceId
+		);
 
 		this.putFromSpecInheritDbgToSpec(specObj, oldVal);
 
@@ -1259,7 +1919,62 @@ NdMSpace : LazyEnvir {
 		++ " outBusResolved=" ++ outBusResolved.asString;
 		if(dbgLocal) { msgPutOut.postln; };
 
-		ndmObj = NdM(key, specObj.func, outBusResolved);
+		// argbus.use.write (writer): outBusResolved is finalized (Bus / Integer / Array)
+		if(outBusResolved.isKindOf(Bus)) {
+			auxState = 'outbus:Bus';
+			auxValue = [outBusResolved.index];
+
+			this.tracePush(
+				'argbus.use.write',
+				key,
+				\putFromSpec,
+				-1,
+				auxState,
+				auxValue,
+				'reason:use',
+				traceId
+			);
+		} {
+			if(outBusResolved.isKindOf(Integer)) {
+				auxState = 'outbus:Int';
+				auxValue = [outBusResolved];
+
+				this.tracePush(
+					'argbus.use.write',
+					key,
+					\putFromSpec,
+					-1,
+					auxState,
+					auxValue,
+					'reason:use',
+					traceId
+				);
+			} {
+				if(outBusResolved.isKindOf(Array)) {
+					auxState = 'outbus:Array';
+					auxValue = outBusResolved.collect { |val|
+						if(val.isKindOf(Bus)) {
+							val.index
+						} {
+							val
+						}
+					};
+
+					this.tracePush(
+						'argbus.use.write',
+						key,
+						\putFromSpec,
+						-1,
+						auxState,
+						auxValue,
+						'reason:use',
+						traceId
+					);
+				};
+			};
+		};
+
+		ndmObj = NdM(key, specObj.func, outBusResolved, \putFromSpec);
 
 		// Ensure graph bookkeeping (sink/edge) is restored even after NdMNameSpace.reset.
 		ndmObj.ensureRegistered(outBusResolved);
@@ -1279,7 +1994,18 @@ NdMSpace : LazyEnvir {
 		envir.put(key, ndmObj);
 
 		if(specObj.autoPlay) {
-			// Fix: capture dirtyNow as late as possible (right before autoPlay decision).
+			this.tracePush(
+				'autoPlay.consume',
+				key,
+				\putFromSpec_autoPlay,
+				-1,
+				\none,
+				-1,
+				\none,
+				traceId
+			);
+			// == case A で f2 -> osc するには以下をコメントアウトしない ==
+			// /* // Fix: capture dirtyNow as late as possible (right before autoPlay decision).
 			monitor = NdMNameSpace.acquire;
 			dirtyNow = false;
 			if(monitor.notNil) {
@@ -1287,15 +2013,17 @@ NdMSpace : LazyEnvir {
 			};
 
 			if(dirtyNow) {
-				this.requestGraphRebuild;
+				this.requestGraphRebuildFrom(\putFromSpec_autoPlay);
 			};
-			this.debugPost { "[DBG][RESTORE][APPLY] where=putFromSpec-autoPlay key=" ++ key.asString
+			// */
+			this.debugPost { "[DBG][RESTORE][APPLY] where=putFromSpec_autoPlay key=" ++ key.asString
 				++ " outBusResolved=" ++ outBusResolved.asString };
 			ndmObj.play;
 		};
 
 		// (removed) graph rebuild trigger is unified to out()/out_()
 
+		this.traceEnd(traceId, \putFromSpec, key, -1, \none, -1, \none);
 		ndmObj
 	}
 
@@ -1374,13 +2102,18 @@ NdMSpace : LazyEnvir {
 			outBusResolved = specObj.outBus;
 			src = "spec";
 		} {
-			// Otherwise inherit from existing NdM, or default to 0.
+			// Otherwise inherit from existing NdM, or use defaultOut, or fall back to 0.
 			if(oldVal.isKindOf(NdM)) {
 				outBusResolved = oldOutVal;
 				src = "inherit";
 			} {
-				outBusResolved = 0;
-				src = "default";
+				if(defaultOutValue.notNil) {
+					outBusResolved = defaultOutValue;
+					src = "defaultOut";
+				} {
+					outBusResolved = 0;
+					src = "default";
+				};
 			};
 		};
 
@@ -1474,31 +2207,113 @@ NdMSpace : LazyEnvir {
 		obj
 	}
 
+	defaultOut {
+		^defaultOutValue
+	}
+
+	defaultOut_ { |outBusIn|
+		var outBusLocal;
+		var badType;
+
+		outBusLocal = outBusIn;
+		badType = false;
+
+		if(outBusLocal.notNil) {
+			badType = true;
+			if(outBusLocal.isKindOf(Integer)) { badType = false; };
+			if(outBusLocal.isKindOf(Array)) { badType = false; };
+			if(outBusLocal.isKindOf(Bus)) { badType = false; };
+		};
+
+		if(badType) {
+			NdMError.reportOutBus(
+				\outbusD,
+				"NdMSpace.defaultOut_@D-guardType",
+				\none,
+				\D,
+				"defaultOut",
+				outBusLocal,
+				"ignored"
+			);
+			^this;
+		};
+
+		defaultOutValue = outBusLocal;
+		^this
+	}
+
 	at { |key|
 		var obj;
 		var ndmObj;
 
 		obj = envir.at(key);
 
-		// If missing, auto-create a placeholder NdM (NdMSpace-only feature).
 		if(obj.isNil) {
-			ndmObj = this.makeProxy(key);
+			this.tracePush('at.miss', key, \user, -1, \none, -1, \none, -1);
+			this.debugPost { "[PATH][AT][MISS] key=" ++ key.asString };
+			ndmObj = this.makeProxy(key, \user);
+			this.debugPost {
+				"[PATH][AT][PROXY] key=" ++ key.asString
+				++ " created=true"
+				++ " out.class=" ++ ndmObj.out.class.asString
+			};
 			^ndmObj;
+		} {
+			this.tracePush('at.hit', key, \user, -1, \none, -1, \none, -1);
+			this.debugPost {
+				"[PATH][AT][HIT] key=" ++ key.asString
+				++ " class=" ++ obj.class.asString
+			};
 		};
 
 		^obj;
 	}
 
-	makeProxy { |key|
+	makeProxy { |key, whereIn|
 		var ndmObj;
+		var whereLocal;
+		var outBusLocal;
+
+		whereLocal = whereIn;
+		if(whereLocal.isNil) { whereLocal = \none; };
 
 		ndmObj = envir.at(key);
 		if(ndmObj.isKindOf(NdM)) {
+			this.tracePush('proxy.exists', key, whereLocal, -1, \none, -1, \none, nil);
+			this.debugPost {
+				"[PATH][PROXY][EXISTS] key=" ++ key.asString
+				++ " class=" ++ ndmObj.class.asString
+			};
 			^ndmObj;
 		};
 
-		ndmObj = NdM(key, { Silent.ar(1) }, 0);
+		this.tracePush('proxy.create', key, whereLocal, -1, \none, -1, \none, nil);
+		this.debugPost { "[PATH][PROXY][CREATE] key=" ++ key.asString };
+
+		outBusLocal = defaultOutValue;
+		if(outBusLocal.isNil) {
+			outBusLocal = 0;
+		};
+
+		ndmObj = NdM(key, { Silent.ar(1) }, outBusLocal, whereLocal);
 		envir.put(key, ndmObj);
+
+		this.tracePush(
+			'proxy.created',
+			key,
+			whereLocal,
+			-1,
+			("outClass:" ++ ndmObj.out.class.asString).asSymbol,
+			-1,
+			("dbg:" ++ ndmObj.dbg.asString).asSymbol,
+			nil
+		);
+		this.debugPost {
+			"[PATH][PROXY][CREATED] key=" ++ key.asString
+			++ " out=" ++ ndmObj.out.asString
+			++ " dbg=" ++ ndmObj.dbg.asString
+		};
+
 		^ndmObj;
 	}
 
@@ -1583,7 +2398,23 @@ NdMSpaceSpec : Object {
 	}
 
 	play {
+		var spaceLocal;
+		var traceId;
+
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(\user, \none, -1, \none, -1, \none);
+			spaceLocal.tracePush('spec.play.enter', \none, \user, -1, \none, -1, \none, traceId);
+		};
+
 		autoPlay = true;
+
+		if(spaceLocal.notNil) {
+			spaceLocal.tracePush('spec.play.mark', \none, \spec_play_mark, -1, \none, -1, \none, traceId);
+			spaceLocal.traceEnd(traceId, \spec_play_mark, \none, -1, \none, -1, \none);
+		};
+
 		^this;
 	}
 
@@ -1626,15 +2457,48 @@ NdMSpaceSpec : Object {
 
 	// Called after NdM creation to apply buffered tags
 	applyTagsTo { |ndmInstance|
+		var spaceLocal;
+		var traceId;
+		var auxState;
+
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+		auxState = ("tagBuffer.nil:" ++ tagBuffer.isNil.asString
+			++ " ndm.nil:" ++ ndmInstance.isNil.asString).asSymbol;
+
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(\user, \none, -1, \none, -1, \none);
+			spaceLocal.tracePush('spec.applyTagsTo.enter', \none, \spec_applyTagsTo, -1, auxState, -1, \none, traceId);
+		};
+
 		if(tagBuffer.notNil) {
 			tagBuffer.do { |tagItem|
 				ndmInstance.tag(tagItem);
 			};
 		};
+
+		if(spaceLocal.notNil) {
+			spaceLocal.traceEnd(traceId, \spec_applyTagsTo, \none, -1, \none, -1, \none);
+		};
 	}
 
 	dbg { |value|
 		var xr;
+		var oldVal;
+		var spaceLocal;
+		var traceId;
+		var auxState;
+
+		oldVal = dbgValue;
+
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+		auxState = ("value:" ++ value.asString ++ " old:" ++ oldVal.asString).asSymbol;
+
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(\user, \none, -1, \none, -1, \none);
+			spaceLocal.tracePush('spec.dbg.enter', \none, \spec_dbg, -1, auxState, -1, \none, traceId);
+		};
 
 		// getter
 		if(value.isNil) {
@@ -1644,11 +2508,35 @@ NdMSpaceSpec : Object {
 			xr = this;
 		};
 
+		if(spaceLocal.notNil) {
+			spaceLocal.traceEnd(traceId, \spec_dbg, \none, -1, \none, -1, \none);
+		};
+
 		^xr;
 	}
 
 	dbg_ { |value|
+		var oldVal;
+		var spaceLocal;
+		var traceId;
+		var auxState;
+
+		oldVal = dbgValue;
+
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+		auxState = ("value:" ++ value.asString ++ " old:" ++ oldVal.asString).asSymbol;
+
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(\user, \none, -1, \none, -1, \none);
+			spaceLocal.tracePush('spec.dbg_.enter', \none, \spec_dbg_, -1, auxState, -1, \none, traceId);
+		};
+
 		dbgValue = value;
+
+		if(spaceLocal.notNil) {
+			spaceLocal.traceEnd(traceId, \spec_dbg_, \none, -1, \none, -1, \none);
+		};
 	}
 
 	debugPost { |msgFunc|

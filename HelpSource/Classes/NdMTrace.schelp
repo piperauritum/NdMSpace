@@ -1,0 +1,98 @@
+class:: NdMTrace
+categories:: NdM
+summary:: Minimal trace row collector used by NdMSpace TRACE wrappers.
+
+DESCRIPTION::
+NdMTrace is a small, language-side trace collector.
+It stores ordered checkpoint rows (begin/push/end) and provides dump/slice helpers.
+NdMSpace may delegate TRACE operations to an NdMTrace instance when traceUseObj is enabled.
+
+CLASSMETHODS::
+method:: new
+Create a new NdMTrace and reset its internal state.
+returns:: NdMTrace
+discussion::
+The constructor calls reset internally.
+
+INSTANCEMETHODS::
+method:: reset
+Clear rows and counters.
+returns:: NdMTrace
+discussion::
+Clears traceList and resets counters (seq/id/active).
+
+method:: begin
+Start a trace unit and return a new traceId.
+argument:: whereIn
+Where vocabulary symbol (defaults to \none).
+argument:: keyIn
+Node key symbol (defaults to \none).
+argument:: reqGenIn
+Request generation number (defaults to -1).
+argument:: auxStateIn
+Auxiliary state symbol (defaults to \none).
+argument:: auxValueIn
+Auxiliary numeric value (defaults to -1).
+argument:: auxReasonIn
+Auxiliary reason symbol (defaults to \none).
+returns:: Integer
+discussion::
+Allocates a new traceId, sets the active traceId, and emits a begin row via push.
+
+method:: end
+End a trace unit (uses active traceId if traceIdIn is nil).
+argument:: traceIdIn
+Trace id to end, or nil to use active id.
+argument:: whereIn
+Where vocabulary symbol (defaults to \none).
+argument:: keyIn
+Node key symbol (defaults to \none).
+argument:: reqGenIn
+Request generation number (defaults to -1).
+argument:: auxStateIn
+Auxiliary state symbol (defaults to \none).
+argument:: auxValueIn
+Auxiliary numeric value (defaults to -1).
+argument:: auxReasonIn
+Auxiliary reason symbol (defaults to \none).
+returns:: NdMTrace
+discussion::
+Appends a trace_end row; clears active id if it matches.
+
+method:: push
+Append one checkpoint row.
+argument:: tagIn
+Checkpoint tag symbol.
+argument:: keyIn
+Node key symbol.
+argument:: whereIn
+Where vocabulary symbol.
+argument:: reqGenIn
+Request generation number.
+argument:: auxStateIn
+Auxiliary state symbol.
+argument:: auxValueIn
+Auxiliary numeric value.
+argument:: auxReasonIn
+Auxiliary reason symbol.
+argument:: traceIdIn
+Trace id, or nil to associate with active id.
+returns:: NdMTrace
+discussion::
+Adds one ordered row to the internal list.
+
+method:: dump
+Human-readable dump of rows (optionally filtered by traceId).
+argument:: traceIdIn
+Trace id to filter, or nil for all.
+returns:: Array
+discussion::
+NdMSpace wrappers call dump(traceId) and return rows.
+
+method:: slice
+Return rows filtered by traceId (for comparisons/tests).
+argument:: traceIdIn
+Trace id to filter.
+returns:: Array
+discussion::
+The NdMSpace TRACE spec describes slice(traceId) as filtered rows.

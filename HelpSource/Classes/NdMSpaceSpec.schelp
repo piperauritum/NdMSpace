@@ -1,0 +1,93 @@
+class:: NdMSpaceSpec
+categories:: NdM
+summary:: Lightweight builder/spec for NdM creation inside NdMSpace.
+
+DESCRIPTION::
+NdMSpaceSpec is a lightweight spec holder created from a Function via fromFunction.
+It stores func/outBus/fadeTime/autoPlay/tagBuffer/dbgValue and provides chainable builders.
+NdMSpace uses this spec to create/configure NdM nodes.
+
+CLASSMETHODS::
+method:: fromFunction
+Create a spec from a UGen function.
+argument:: inFunc
+Function producing the node UGen graph.
+returns:: NdMSpaceSpec
+discussion::
+Initializes outBus=nil, fadeTime=0, autoPlay=false, tagBuffer=nil.
+
+INSTANCEMETHODS::
+method:: out
+Set outBus (Integer/Array/Bus/nil). Reject NdMSpace instance.
+argument:: outBusIn
+Out-bus target.
+returns:: NdMSpaceSpec
+discussion::
+If outBusIn is an NdMSpace instance, throws an Error.
+
+method:: fade
+Set fade time (seconds).
+argument:: fadeTimeIn
+Fade duration.
+returns:: NdMSpaceSpec
+
+method:: play
+Mark autoPlay=true (consumed later by NdMSpace).
+returns:: NdMSpaceSpec
+discussion::
+Also emits traceBegin/tracePush/traceEnd when inside an active NdMSpace.
+
+method:: o
+Alias of out.
+argument:: outTarget
+Out-bus target.
+returns:: NdMSpaceSpec
+
+method:: f
+Alias of fade.
+argument:: fadeTimeIn
+Fade duration.
+returns:: NdMSpaceSpec
+
+method:: p
+Alias of play.
+returns:: NdMSpaceSpec
+
+method:: tag
+Buffer a tag to be applied after NdM creation.
+argument:: tagSymbol
+Tag symbol.
+returns:: NdMSpaceSpec
+discussion::
+tagBuffer is created lazily; Array.add requires reassignment.
+
+method:: untag
+Remove a buffered tag.
+argument:: tagSymbol
+Tag symbol.
+returns:: NdMSpaceSpec
+
+method:: t
+Alias of tag.
+argument:: tagSymbol
+Tag symbol.
+returns:: NdMSpaceSpec
+
+method:: applyTagsTo
+Apply buffered tags to an NdM instance (post-create hook).
+argument:: ndmInstance
+Target NdM instance.
+returns:: nil
+discussion::
+Iterates tagBuffer and calls ndmInstance.tag(tagItem).
+
+method:: dbg
+Get or set dbgValue.
+
+argument:: value
+If nil, returns current dbgValue; otherwise sets dbgValue.
+
+returns:: Object
+discussion::
+When used as setter, returns this; when used as getter, returns dbgValue.
+The underlying property setter exists as dbg_ but is documented here as dbg.

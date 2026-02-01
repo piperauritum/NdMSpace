@@ -315,6 +315,202 @@ NdMTag : Object {
 }
 
 
+NdMTrace : Object {
+
+	var traceList;
+	var traceSeq;
+	var traceIdNext;
+	var traceActiveId;
+
+	*new {
+		var xr;
+
+		xr = super.new;
+		xr.reset;
+
+		^xr;
+	}
+
+	reset {
+		traceList = Array.new;
+		traceSeq = 0;
+		traceIdNext = 0;
+		traceActiveId = -1;
+
+		^this;
+	}
+
+	begin { |whereIn, keyIn, reqGenIn, auxStateIn, auxValueIn, auxReasonIn|
+		var where;
+		var key;
+		var reqGen;
+		var auxState;
+		var auxValue;
+		var auxReason;
+		var traceId;
+
+		where = whereIn ? \none;
+		key = keyIn ? \none;
+		reqGen = reqGenIn ? -1;
+		auxState = auxStateIn ? \none;
+		auxValue = auxValueIn ? -1;
+		auxReason = auxReasonIn ? \none;
+
+		traceId = (traceIdNext + 1);
+		traceIdNext = traceId;
+		traceActiveId = traceId;
+
+		this.push(\trace_begin, key, where, reqGen, auxState, auxValue, auxReason, traceId);
+
+		^traceId;
+	}
+
+	end { |traceIdIn, whereIn, keyIn, reqGenIn, auxStateIn, auxValueIn, auxReasonIn|
+		var where;
+		var key;
+		var reqGen;
+		var auxState;
+		var auxValue;
+		var auxReason;
+		var traceId;
+		var xr;
+
+		where = whereIn ? \none;
+		key = keyIn ? \none;
+		reqGen = reqGenIn ? -1;
+		auxState = auxStateIn ? \none;
+		auxValue = auxValueIn ? -1;
+		auxReason = auxReasonIn ? \none;
+
+		traceId = traceIdIn;
+		if(traceId.isNil) {
+			traceId = traceActiveId;
+		};
+		if(traceId.isNil) {
+			traceId = -1;
+		};
+
+		this.push(\trace_end, key, where, reqGen, auxState, auxValue, auxReason, traceId);
+
+		if(traceActiveId == traceId) {
+			traceActiveId = -1;
+		};
+
+		xr = this;
+		^xr;
+	}
+
+	push { |tagIn, keyIn, whereIn, reqGenIn, auxStateIn, auxValueIn, auxReasonIn, traceIdIn|
+		var tag;
+		var key;
+		var where;
+		var reqGen;
+
+		var auxState;
+		var auxValue;
+		var auxReason;
+
+		var traceId;
+		var threadId;
+		var row;
+		var xr;
+
+		tag = tagIn ? \none;
+		key = keyIn ? \none;
+		where = whereIn ? \none;
+		reqGen = reqGenIn ? -1;
+
+		auxState = auxStateIn ? \none;
+		auxValue = auxValueIn ? -1;
+		auxReason = auxReasonIn ? \none;
+
+		traceId = traceIdIn;
+		if(traceId.isNil) {
+			traceId = traceActiveId;
+		};
+		if(traceId.isNil) {
+			traceId = -1;
+		};
+
+		threadId = thisThread.hash;
+
+		traceSeq = (traceSeq + 1);
+
+		row = IdentityDictionary[
+			(\seq -> traceSeq),
+			(\traceId -> traceId),
+			(\threadId -> threadId),
+			(\tag -> tag),
+			(\key -> key),
+			(\where -> where),
+			(\reqGen -> reqGen),
+			(\auxState -> auxState),
+			(\auxValue -> auxValue),
+			(\auxReason -> auxReason)
+		];
+
+		traceList = traceList.add(row);
+
+		xr = this;
+		^xr;
+	}
+
+	slice { |traceIdIn|
+		var traceId;
+		var rows;
+		var row;
+
+		traceId = traceIdIn;
+
+		if(traceList.isNil) {
+			rows = Array.new;
+		} {
+			if(traceId.isNil) {
+				rows = traceList.copy;
+			} {
+				rows = Array.new;
+				traceList.do { |rowItem|
+					row = rowItem;
+					if((row[\traceId]) == traceId) {
+						rows = rows.add(row);
+					};
+				};
+			};
+		};
+
+		^rows;
+	}
+
+	dump { |traceIdIn|
+		var rows;
+		var row;
+		var line;
+
+		rows = this.slice(traceIdIn);
+
+		rows.do { |rowItem|
+			row = rowItem;
+			line = "[ROW] seq=% traceId=% threadId=% tag=% key=% where=% reqGen=% auxState=% auxValue=% auxReason=%".format(
+				row[\seq],
+				row[\traceId],
+				row[\threadId],
+				row[\tag],
+				row[\key],
+				row[\where],
+				row[\reqGen],
+				row[\auxState],
+				row[\auxValue],
+				row[\auxReason]
+			);
+			line.postln;
+		};
+
+		^rows;
+	}
+
+}
+
+
 + NdM {
 
 	// ============================================================
@@ -393,11 +589,16 @@ NdMTag : Object {
 
 	dbg { |value|
 		var flag;
+		var oldVal;
+		var spaceLocal;
+		var traceId;
 
 		// getter
 		if(value.isNil) {
 			^(canDebug ? false);
 		};
+
+		oldVal = (canDebug ? false);
 
 		// setter
 		if(value.isNumber) {
@@ -406,12 +607,48 @@ NdMTag : Object {
 			flag = (value == true);
 		};
 
+		// ("[TRACE][PATH] NdM.dbg set value=" ++ value.asString
+		// 	++ " norm=" ++ flag.asString
+		// 	++ " old=" ++ oldVal.asString
+		// ).postln;
+
 		canDebug = flag;
+
+		// Fix vX.Y.Z: dbg flag change must rebuild this proxy graph (dbg affects proxy func branches)
+		if(oldVal != flag) {
+			this.updateProxyOut('reason:dbgDelta');
+			spaceLocal = NdMSpace.current;
+			traceId = nil;
+			if(spaceLocal.notNil) {
+				traceId = spaceLocal.traceBegin(\dbg_delta, key, reqGen, \none, -1, \none);
+				spaceLocal.tracePush(
+					'dbg.delta',
+					key,
+					\dbg_delta,
+					reqGen,
+					("old:" ++ oldVal.asString).asSymbol,
+					-1,
+					("new:" ++ flag.asString).asSymbol,
+					traceId
+				);
+				spaceLocal.tracePush('dbg.willUpdateProxyOut', key, \dbg_delta, reqGen, \none, -1, \none, traceId);
+			};
+
+			this.updateProxyOut;
+
+			if(spaceLocal.notNil) {
+				spaceLocal.traceEnd(traceId, \dbg_delta, key, reqGen, \none, -1, \none);
+			};
+		};
+
 		^this;
 	}
 
 	dbg_ { |value|
 		var flag;
+		var oldVal;
+
+		oldVal = (canDebug ? false);
 
 		if(value.isNumber) {
 			flag = (value > 0);
@@ -419,9 +656,18 @@ NdMTag : Object {
 			flag = (value == true);
 		};
 
-		canDebug = flag;
-	}
+		("[TRACE][PATH] NdM.dbg_ set value=" ++ value.asString
+			++ " norm=" ++ flag.asString
+			++ " old=" ++ oldVal.asString
+		).postln;
 
+		canDebug = flag;
+
+		// Fix vX.Y.Z: dbg flag change must rebuild this proxy graph (dbg affects proxy func branches)
+		if(oldVal != flag) {
+			this.updateProxyOut('reason:dbgDelta');
+		};
+	}
 
 	// ============================================================
 	// 3. poll flag API (instance only)
@@ -452,7 +698,7 @@ NdMTag : Object {
 		canPoll = flag;
 
 		// Rebuild proxy graph so that poll UGens are updated.
-		this.updateProxyOut;
+		this.updateProxyOut('reason:pollDelta');
 
 		^this;
 	}
@@ -467,7 +713,7 @@ NdMTag : Object {
 		};
 
 		canPoll = flag;
-		this.updateProxyOut;
+		this.updateProxyOut('reason:pollDelta');
 	}
 
 

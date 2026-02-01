@@ -1,0 +1,47 @@
+class:: NdMTag
+categories:: NdM
+summary:: Tag-based group operations for NdM instances.
+
+DESCRIPTION::
+NdMTag provides tag-oriented operations over NdM instances.
+It delegates tag lookup to NdMNameSpace (acquire/nodesForTag/allTags),
+then calls play/stop/free on the returned NdM instances.
+
+CLASSMETHODS::
+method:: play
+Call play on all NdM instances that have the tag.
+argument:: tagSymbol
+Tag to match.
+returns:: NdMTag
+discussion::
+Retrieves nodes via nodesForTag(tagSymbol) then calls .play on each.
+
+method:: stop
+Call stop on all NdM instances that have the tag.
+argument:: tagSymbol
+Tag to match.
+returns:: NdMTag
+discussion::
+Skips nil entries defensively.
+
+method:: free
+Call free on all NdM instances that have the tag.
+argument:: tagSymbol
+Tag to match.
+returns:: NdMTag
+discussion::
+Skips nil entries defensively.
+
+method:: nodesForTag
+Return NdM instances associated with the tag.
+argument:: tagSymbol
+Tag to match.
+returns:: Array
+discussion::
+Uses NdMNameSpace.acquire then monitor.nodesForTag.
+
+method:: tags
+Return all known tags.
+returns:: Array
+discussion::
+Uses NdMNameSpace.acquire then monitor.allTags.

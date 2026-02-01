@@ -1,0 +1,17 @@
+class:: NdMError
+categories:: NdM
+summary:: Error type for invalid NdM usage and specification violations.
+
+DESCRIPTION::
+NdMError represents errors specific to NdM and NdMSpace operation.
+
+It is raised when:
+list::
+## Invalid output bus specifications are provided
+## Mixed-rate buses are used where not allowed
+## Unsupported values are passed to NdM or NdMSpace APIs
+## Internal consistency checks fail
+::
+
+NdMError is intended to clearly distinguish NdM-specific failures
+from generic SuperCollider errors.

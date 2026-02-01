@@ -142,6 +142,13 @@
 		busIndex = outInfo[0];
 		busRate = outInfo[1];
 
+		ndmLocal.debugPost(
+			"[DBG][ARGBUS][W] key=" ++ ndmLocal.key.asString
+			++ " outbusLocal.class=" ++ outbusLocal.class.asString
+			++ " busIndex=" ++ busIndex.asString
+			++ " busRate=" ++ busRate.asString
+		);
+
 		signalRate = signalLocal.rate;
 
 		fadeEnv = this.buildNdmFadeEnv(ndmAmp, ndmFade);
@@ -319,6 +326,16 @@
 
 			valLocal = 0;
 			if(busLocal.notNil) {
+
+				this.debugPost(
+					"[DBG][ARGBUS][R] key=" ++ key.asString
+					++ " arg=" ++ argName.asString
+					++ " busIndex=" ++ busLocal.index.asString
+					++ " busRate=" ++ busLocal.rate.asString
+					++ " rateLocal=" ++ rateLocal.asString
+					++ " chans=" ++ chansLocal.asString
+				);
+
 				if((rateLocal == \audio) || (busLocal.rate == \audio)) {
 					valLocal = InFeedback.ar(busLocal.index, chansLocal);
 				} {
@@ -469,6 +486,30 @@
 		var fadeDur;
 		var fadeLocal;
 		var switchLocal;
+		var dbgFlag;
+
+		var spaceLocal;
+		var traceId;
+
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(\ndm_requestGraphRebuild, key, -1, \none, -1, \none);
+			spaceLocal.tracePush(
+				'ndm.requestGraphRebuild.enter',
+				key,
+				\ndm_requestGraphRebuild,
+				-1,
+				("running:" ++ running.asString ++ " reqGenBefore:" ++ reqGen.asString).asSymbol,
+				-1,
+				\none,
+				traceId
+			);
+			spaceLocal.traceEnd(traceId, \ndm_requestGraphRebuild, key, -1, \none, -1, \none);
+		};
+
+		dbgFlag = canDebug ? false;
 
 		fadeDur = fadetime;
 		if(fadeDur.isNil) {
@@ -487,11 +528,32 @@
 			switchLocal = 0.0;
 		};
 
+		this.tracePush(
+			'reqRebuild.before',
+			key,
+			\fadePlay,
+			reqGen,
+			("dbg:" ++ dbgFlag.asString
+				++ " fade:" ++ fadeLocal.asString
+				++ " switch:" ++ switchLocal.asString
+			).asSymbol,
+			-1,
+			\none,
+			traceId
+		);
+
 		wantRebuild = true;
 		wantFade = fadeLocal;
 		wantSwitch = switchLocal;
 
+		("[REQ] rebuild before=" ++ reqGen.asString).postln;
 		reqGen = reqGen + 1;
+		("[REQ] rebuild after=" ++ reqGen.asString).postln;
+
+		("[TRACE][NdM][REQ-REBUILD] key=" ++ key.asString
+			++ " reqGen(after)=" ++ reqGen.asString
+		).postln;
+
 		this.applyKick;
 
 		^this;
@@ -502,6 +564,35 @@
 		var fadeDur;
 		var fadeLocal;
 		var switchLocal;
+		var spaceLocal;
+		var traceId;
+
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(
+				\none,
+				key,
+				(reqGen ? 0),
+				("proxyNil:" ++ proxy.isNil.asString
+					++ " reqGenBefore:" ++ (reqGen ? 0).asString
+				).asSymbol,
+				-1,
+				\none
+			);
+			spaceLocal.tracePush(
+				'path.play.enter',
+				key,
+				\none,
+				(reqGen ? 0),
+				("proxyNil:" ++ proxy.isNil.asString
+					++ " reqGenBefore:" ++ (reqGen ? 0).asString
+				).asSymbol,
+				-1,
+				\none,
+				traceId
+			);
+		};
 
 		if(proxy.isNil) {
 			// Recreate NodeProxy so that a previously-freed NdM can be played again.
@@ -536,7 +627,10 @@
 		wantFade = fadeLocal;
 		wantSwitch = switchLocal;
 
+		("[REQ] play before=" ++ reqGen.asString).postln;
 		reqGen = reqGen + 1;
+		("[REQ] play after=" ++ reqGen.asString).postln;
+
 		this.applyKick;
 
 		^this;
@@ -548,6 +642,35 @@
 		var fadeLocal;
 		var switchLocal;
 		var monitor1;
+		var spaceLocal;
+		var traceId;
+
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(
+				\none,
+				key,
+				(reqGen ? 0),
+				("proxyNil:" ++ proxy.isNil.asString
+					++ " reqGenBefore:" ++ (reqGen ? 0).asString
+				).asSymbol,
+				-1,
+				\none
+			);
+			spaceLocal.tracePush(
+				'path.stop.enter',
+				key,
+				\none,
+				(reqGen ? 0),
+				("proxyNil:" ++ proxy.isNil.asString
+					++ " reqGenBefore:" ++ (reqGen ? 0).asString
+				).asSymbol,
+				-1,
+				\none,
+				traceId
+			);
+		};
 
 		if(proxy.isNil) {
 			this.debugPost("[NdM.stop] ignored: proxy is nil (already freed?) key=" ++ key.asString);
@@ -582,7 +705,10 @@
 		wantFade = fadeLocal;
 		wantSwitch = switchLocal;
 
+		("[REQ] stop before=" ++ reqGen.asString).postln;
 		reqGen = reqGen + 1;
+		("[REQ] stop after=" ++ reqGen.asString).postln;
+
 		this.applyKick;
 
 		^this;
@@ -623,8 +749,42 @@
 
 	applyKick {
 		var doStart;
+		var proxyLocal;
+		var isPlayingLocal;
+		var nodeIdLocal;
+		var dbgFlag;
+		var spaceLocal;
+		var traceId;
+
+		dbgFlag = canDebug ? false;
+
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(\none, key, reqGen, ("running:" ++ running.asString).asSymbol, -1, \none);
+			spaceLocal.tracePush('applyKick.enter', key, \none, reqGen, ("running:" ++ running.asString).asSymbol, -1, \none, traceId);
+		};
 
 		doStart = running.not;
+
+		if(doStart) {
+			if(spaceLocal.notNil) {
+				spaceLocal.tracePush(
+					'state.applyKick.start.1',
+					key,
+					\none,
+					reqGen,
+					("running:" ++ running.asString
+						++ " -> true"
+						++ " reason:applyKick.start.1"
+					).asSymbol,
+					-1,
+					\none,
+					traceId
+				);
+			};
+			running = true;
+		};
 
 		this.debugPost(
 			"[APPLY-KICK] key=" ++ key.asString
@@ -633,8 +793,60 @@
 			++ " doStart=" ++ doStart.asString
 		);
 
+		proxyLocal = proxy;
+		isPlayingLocal = false;
+		nodeIdLocal = nil;
+		if(proxyLocal.notNil) {
+			isPlayingLocal = proxyLocal.isPlaying;
+			try { nodeIdLocal = proxyLocal.nodeID; } { nodeIdLocal = nil; };
+		};
+
+		if(spaceLocal.notNil) {
+			spaceLocal.tracePush(
+				'proxy.applyKick.read',
+				key,
+				\none,
+				reqGen,
+				("running:" ++ running.asString
+					++ " proxyNil:" ++ proxyLocal.isNil.asString
+					++ " isPlaying:" ++ isPlayingLocal.asString
+					++ " nodeID:" ++ nodeIdLocal.asString
+					++ " reason:applyKick.read"
+				).asSymbol,
+				-1,
+				\none,
+				traceId
+			);
+		};
+
+		this.debugPost(
+			"[APPLY-KICK] proxyState key=" ++ key.asString
+			++ " running=" ++ running.asString
+			++ " isPlaying=" ++ isPlayingLocal.asString
+			++ " nodeID=" ++ nodeIdLocal.asString
+		);
+
 		if(doStart) {
+			if(spaceLocal.notNil) {
+				spaceLocal.tracePush(
+					'state.applyKick.start.2',
+					key,
+					\none,
+					reqGen,
+					("running:" ++ running.asString
+						++ " -> true"
+						++ " reason:applyKick.start.2"
+					).asSymbol,
+					-1,
+					\none,
+					traceId
+				);
+			};
 			running = true;
+
+			if(spaceLocal.notNil) {
+				spaceLocal.tracePush('applyKick.startFork', key, \none, reqGen, ("running:" ++ running.asString).asSymbol, -1, \none, traceId);
+			};
 
 			this.debugPost(
 				"[APPLY-KICK] start fork key=" ++ key.asString
@@ -661,6 +873,21 @@
 					};
 
 					// Always clear: apply may crash or may forget to flip it back.
+					if(spaceLocal.notNil) {
+						spaceLocal.tracePush(
+							'state.applyKick.cleanup.protect',
+							key,
+							\none,
+							reqGen,
+							("running:" ++ running.asString
+								++ " -> false"
+								++ " reason:applyKick.cleanup.protect"
+							).asSymbol,
+							-1,
+							\none,
+							traceId
+						);
+					};
 					running = false;
 
 					// Safe to clear even if not set; prevents leakage across failures.
@@ -668,11 +895,19 @@
 				};
 			};
 		} {
+			if(spaceLocal.notNil) {
+				spaceLocal.tracePush('applyKick.alreadyRunning', key, \none, reqGen, ("running:" ++ running.asString).asSymbol, -1, \none, traceId);
+			};
+
 			this.debugPost(
 				"[APPLY] already running key=" ++ key.asString
 				++ " running=" ++ running.asString
 				++ " reqGen=" ++ reqGen.asString
 			);
+		};
+
+		if(spaceLocal.notNil) {
+			spaceLocal.traceEnd(traceId, \none, key, reqGen, \none, -1, \none);
 		};
 
 		^this;
@@ -688,10 +923,37 @@
 		var wantRebuildLocal;
 		var funcLocal;
 		var funcChanged;
+		var traceId;
+		var spaceLocal;
 
 		xr = IdentityDictionary.new;
 
 		proxyLocal = proxy;
+
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(
+				\fadePlay,
+				key,
+				(reqGen ? 0),
+				\applySnapshot,
+				-1,
+				\none
+			);
+
+			spaceLocal.tracePush(
+				'path.applySnapshot.enter',
+				key,
+				\fadePlay,
+				(reqGen ? 0),
+				("snapId:" ++ xr.identityHash.asString).asSymbol,
+				-1,
+				\none,
+				traceId
+			);
+		};
 
 		wantPlayLocal = if(wantPlay.isNil) { false } { wantPlay };
 		wantFreeLocal = if(wantFree.isNil) { false } { wantFree };
@@ -726,6 +988,98 @@
 		^xr;
 	}
 
+	kickSnapshot {
+		var xr;
+		var proxyLocal;
+		var runningLocal;
+		var reqGenLocal;
+		var wantPlayLocal;
+		var isPlayingLocal;
+		var nodeIdLocal;
+		var traceId;
+		var spaceLocal = NdMSpace.current;
+
+		xr = IdentityDictionary.new;
+
+		proxyLocal = proxy;
+
+		runningLocal = if(running.isNil) { false } { running };
+		reqGenLocal = (reqGen ? 0);
+		wantPlayLocal = if(wantPlay.isNil) { false } { wantPlay };
+
+		traceId = spaceLocal.traceBegin(
+			\kickSnapshot,
+			key,
+			reqGenLocal,
+			\fadePlay,
+			-1,
+			\none
+		);
+
+		spaceLocal.tracePush(
+			'path.kickSnapshot.enter',
+			key,
+			\fadePlay,
+			reqGenLocal,
+			("snapId:" ++ xr.identityHash.asString
+				++ " running:" ++ runningLocal.asString
+				++ " wantPlay:" ++ wantPlayLocal.asString
+			).asSymbol,
+			-1,
+			\none,
+			traceId
+		);
+
+		isPlayingLocal = false;
+		nodeIdLocal = nil;
+
+		if(proxyLocal.notNil) {
+			if(proxyLocal.respondsTo(\isPlaying)) {
+				isPlayingLocal = proxyLocal.isPlaying;
+			};
+
+			if(proxyLocal.respondsTo(\nodeID)) {
+				try {
+					nodeIdLocal = proxyLocal.nodeID;
+				} {
+					nodeIdLocal = nil;
+				};
+			};
+		};
+
+		spaceLocal.tracePush(
+			'proxy.kickSnapshot.read',
+			key,
+			\fadePlay,
+			reqGenLocal,
+			("snapId:" ++ xr.identityHash.asString
+				++ " proxyNil:" ++ proxyLocal.isNil.asString
+				++ " isPlaying:" ++ isPlayingLocal.asString
+				++ " nodeID:" ++ nodeIdLocal.asString
+			).asSymbol,
+			-1,
+			\none,
+			traceId
+		);
+
+		xr.put(\running, runningLocal);
+		xr.put(\reqGen, reqGenLocal);
+		xr.put(\wantPlay, wantPlayLocal);
+		xr.put(\isPlaying, isPlayingLocal);
+		xr.put(\nodeID, nodeIdLocal);
+
+		("[KICKSNAP] key=" ++ key.asString
+			++ " snapId=" ++ xr.identityHash.asString
+			++ " snap.reqGen=" ++ reqGenLocal.asString
+			++ " snap.wantPlay=" ++ wantPlayLocal.asString
+			++ " snap.running=" ++ runningLocal.asString
+			++ " isPlaying=" ++ isPlayingLocal.asString
+			++ " nodeID=" ++ nodeIdLocal.asString
+		).postln;
+
+		^xr;
+	}
+
 	apply {
 		var doLoop;
 		var genStart;
@@ -742,21 +1096,61 @@
 		// var monitor1;
 		var snap;
 
+		var spaceLocal;
+		var traceId;
+
 		// preemptable-wait temps (must be declared at block head)
 		// removed: remain/step/remain2/step2 (handled by applyWaitGen)
 
 		// formerly mid-block var in old apply
 		// var srv;
 
+		spaceLocal = NdMSpace.current;
+		traceId = nil;
+
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(
+				\none,
+				key,
+				(reqGen ? 0),
+				("reqGenStart:" ++ (reqGen ? 0).asString).asSymbol,
+				-1,
+				\none
+			);
+			spaceLocal.tracePush(
+				'path.apply.enter',
+				key,
+				\none,
+				(reqGen ? 0),
+				("reqGenStart:" ++ (reqGen ? 0).asString).asSymbol,
+				-1,
+				\none,
+				traceId
+			);
+		};
+
 		doLoop = true;
 
 		while { doLoop } {
 
 			genStart = reqGen;
+			("[APPLY] start genStart=" ++ genStart.asString ++ " reqGen=" ++ reqGen.asString).postln;
 
 			proxyLocal = proxy;
 			if(proxyLocal.isNil) {
 				this.debugPost("[APPLY] proxy is nil");
+				if(spaceLocal.notNil) {
+					spaceLocal.tracePush(
+						'state.apply.abort.proxyNil.outer',
+						key,
+						\none,
+						genStart,
+						("running:" ++ running.asString ++ " -> false reason:apply.abort.proxyNil.outer").asSymbol,
+						-1,
+						\none,
+						traceId
+					);
+				};
 				running = false;
 				doLoop = false;
 			} {
@@ -765,10 +1159,23 @@
 				proxyLocal = snap.at(\proxy);
 				if(proxyLocal.isNil) {
 					this.debugPost("[APPLY] proxy is nil");
+					if(spaceLocal.notNil) {
+						spaceLocal.tracePush(
+							'state.apply.abort.proxyNil.inner',
+							key,
+							\none,
+							genStart,
+							("running:" ++ running.asString ++ " -> false reason:apply.abort.proxyNil.inner").asSymbol,
+							-1,
+							\none,
+							traceId
+						);
+					};
 					running = false;
 					doLoop = false;
 				} {
 					wantPlayLocal = snap.at(\wantPlay);
+
 					wantFreeLocal = snap.at(\wantFree);
 					wantRebuildLocal = snap.at(\wantRebuild);
 					fadeLocal = snap.at(\fade);
@@ -797,7 +1204,7 @@
 						switchLocal
 					);
 				} {
-					// B0) graph rebuild (B1: fadeDown -> swap source -> ampUp(init))
+					// B0) proxy-side rebuild (fadeDown -> swap source -> ampUp(init))
 					if(wantRebuildLocal) {
 						this.applyHandleGraphRebuild(genStart, proxyLocal, fadeLocal, switchLocal, funcLocal);
 						ampInit = true;
@@ -813,12 +1220,32 @@
 
 					// generation gate
 					if(reqGen != genStart) {
+						("[APPLY] end genStart=" ++ genStart.asString
+							++ " reqGen=" ++ reqGen.asString
+							++ " result=rerun"
+						).postln;
 						// rerun latest
 					} {
+						("[APPLY] end genStart=" ++ genStart.asString
+							++ " reqGen=" ++ reqGen.asString
+							++ " result=done"
+						).postln;
 						doLoop = false;
 					};
 
 					if(doLoop.not) {
+						if(spaceLocal.notNil) {
+							spaceLocal.tracePush(
+								'state.apply.done',
+								key,
+								\none,
+								genStart,
+								("running:" ++ running.asString ++ " -> false reason:apply.done").asSymbol,
+								-1,
+								\none,
+								traceId
+							);
+						};
 						running = false;
 						this.debugPost("[APPLY] done gen=" ++ genStart.asString);
 					};
@@ -832,6 +1259,30 @@
 	applyWaitGen { |genStart, dur, step|
 		var remain;
 		var stepLocal;
+		var traceId;
+		var spaceLocal = NdMSpace.current;
+
+		traceId = spaceLocal.traceBegin(
+			\applyWaitGen,
+			key,
+			genStart,
+			\fadePlay,
+			-1,
+			\none
+		);
+
+		spaceLocal.tracePush(
+			'path.applyWaitGen.enter',
+			key,
+			\fadePlay,
+			genStart,
+			("dur:" ++ (dur ? 0.0).asString
+				++ " step:" ++ (step ? 0.05).asString
+			).asSymbol,
+			-1,
+			\none,
+			traceId
+		);
 
 		remain = dur ? 0.0;
 		if(remain < 0.0) {
@@ -858,6 +1309,30 @@
 
 	applyHandleFree { |genStart, proxyLocal, fadeLocal, switchLocal|
 		var monitor1;
+		var traceId;
+		var spaceLocal = NdMSpace.current;
+
+		traceId = spaceLocal.traceBegin(
+			\applyHandleFree,
+			key,
+			genStart,
+			\fadePlay,
+			-1,
+			\none
+		);
+
+		spaceLocal.tracePush(
+			'path.applyHandleFree.enter',
+			key,
+			\fadePlay,
+			genStart,
+			("fade:" ++ fadeLocal.asString
+				++ " switch:" ++ switchLocal.asString
+			).asSymbol,
+			-1,
+			\none,
+			traceId
+		);
 
 		// fade-out by VarLag if requested
 		if(reqGen == genStart) {
@@ -903,6 +1378,19 @@
 			wantPlay = false;
 			appliedFunc = nil;
 
+			spaceLocal.tracePush(
+				'state.applyFree.done',
+				key,
+				\fadePlay,
+				genStart,
+				("running:" ++ running.asString
+					++ " -> false"
+					++ " reason:apply.free.done"
+				).asSymbol,
+				-1,
+				\none,
+				traceId
+			);
 			running = false;
 			this.debugPost("[APPLY] freed gen=" ++ genStart.asString);
 		} {
@@ -922,6 +1410,31 @@
 		var grpAfter;
 		var grpIdBefore;
 		var grpIdAfter;
+		var traceId;
+		var spaceLocal = NdMSpace.current;
+
+		traceId = spaceLocal.traceBegin(
+			\applyHandleGraphRebuild,
+			key,
+			genStart,
+			\fadePlay,
+			-1,
+			\none
+		);
+
+		this.tracePush(
+			'path.applyHandleGraphRebuild.enter',
+			key,
+			\fadePlay,
+			genStart,
+			("fade:" ++ fadeLocal.asString
+				++ " switch:" ++ switchLocal.asString
+				++ " proxyIsPlaying:" ++ proxyLocal.isPlaying.asString
+			).asSymbol,
+			-1,
+			\none,
+			traceId
+		);
 
 		// Fade down to 0 with VarLag, then rebuild source to enforce node ordering.
 		if(reqGen == genStart) {
@@ -1017,6 +1530,34 @@
 
 	applyHandleFuncSwitch { |genStart, proxyLocal, fadeLocal, switchLocal, funcLocal|
 		var proxyFunc;
+		var traceId;
+		var spaceLocal = NdMSpace.current;
+
+		traceId = nil;
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(
+				\applyHandleFuncSwitch,
+				key,
+				genStart,
+				\fadePlay,
+				-1,
+				\none
+			);
+
+			spaceLocal.tracePush(
+				'path.applyHandleFuncSwitch.enter',
+				key,
+				\fadePlay,
+				genStart,
+				("fade:" ++ fadeLocal.asString
+					++ " switch:" ++ switchLocal.asString
+					++ " proxyIsPlaying:" ++ proxyLocal.isPlaying.asString
+				).asSymbol,
+				-1,
+				\none,
+				traceId
+			);
+		};
 
 		if((switchLocal > 0.0) && proxyLocal.isPlaying && proxyLocal.source.notNil) {
 
@@ -1063,6 +1604,40 @@
 	applyHandlePlayStop { |genStart, proxyLocal, fadeLocal, switchLocal, wantPlayLocal, ampInit|
 		var srvLocal;
 		var doPlay;
+		var isPlayingBefore;
+		var nodeIdBefore;
+		var isPlayingAfter;
+		var nodeIdAfter;
+		var traceId;
+		var spaceLocal = NdMSpace.current;
+
+		traceId = nil;
+
+		if(spaceLocal.notNil) {
+			traceId = spaceLocal.traceBegin(
+				\applyHandlePlayStop,
+				key,
+				genStart,
+				\fadePlay,
+				-1,
+				\none
+			);
+
+			spaceLocal.tracePush(
+				'path.applyHandlePlayStop.enter',
+				key,
+				\fadePlay,
+				genStart,
+				("wantPlay:" ++ wantPlayLocal.asString
+					++ " ampInit:" ++ ampInit.asString
+					++ " fade:" ++ fadeLocal.asString
+					++ " switch:" ++ switchLocal.asString
+				).asSymbol,
+				-1,
+				\none,
+				traceId
+			);
+		};
 
 		// Normalize play decision (avoid unintended stop path)
 		doPlay = wantPlayLocal && wantFree.not;
@@ -1070,7 +1645,29 @@
 		if(reqGen == genStart) {
 
 			if(doPlay) {
+				isPlayingBefore = proxyLocal.isPlaying;
+				nodeIdBefore = nil;
+				try { nodeIdBefore = proxyLocal.nodeID; } { nodeIdBefore = nil; };
+				this.debugPost(
+					"[APPLY][PLAY] before play gen=" ++ genStart.asString
+					++ " key=" ++ key.asString
+					++ " wantPlay=" ++ wantPlayLocal.asString
+					++ " wantFree=" ++ wantFree.asString
+					++ " isPlaying=" ++ isPlayingBefore.asString
+					++ " nodeID=" ++ nodeIdBefore.asString
+				);
+
 				proxyLocal.play;
+
+				isPlayingAfter = proxyLocal.isPlaying;
+				nodeIdAfter = nil;
+				try { nodeIdAfter = proxyLocal.nodeID; } { nodeIdAfter = nil; };
+				this.debugPost(
+					"[APPLY][PLAY] after  play gen=" ++ genStart.asString
+					++ " key=" ++ key.asString
+					++ " isPlaying=" ++ isPlayingAfter.asString
+					++ " nodeID=" ++ nodeIdAfter.asString
+				);
 
 				// Always push fade first (VarLag timebase).
 				proxyLocal.set(\ndmFade, fadeLocal, \switchDur, switchLocal, \ndmGate, 1);

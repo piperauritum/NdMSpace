@@ -1,0 +1,52 @@
+class:: NdMNameSpace
+categories:: NdM
+summary:: Global registry for NdM instances, argument buses, and tags.
+
+DESCRIPTION::
+NdMNameSpace is the global registry that stores all NdM-related bookkeeping
+independent of any particular NdMSpace instance.
+
+It manages:
+list::
+## Key → NdM instance mappings
+## Argument-bus allocation and history
+## Tag registration and lookup
+## Restore helpers used after graph rebuild or environment switches
+::
+
+NdMSpace and helper classes such as NdMTag delegate all namespace-level
+lookup and persistence tasks to NdMNameSpace.
+Users normally do not instantiate or manipulate this class directly.
+
+CLASSMETHODS::
+
+method:: acquire
+Return the singleton NdMNameSpace instance.
+returns:: NdMNameSpace
+discussion::
+All namespace access goes through this singleton.
+
+method:: reset
+Clear all stored keys, buses, and tags.
+returns:: nil
+discussion::
+This is typically triggered indirectly via NdMSpace.clean or reset.
+
+method:: nodesForTag
+Return all NdM instances associated with the given tag.
+argument:: tagSymbol
+Tag symbol.
+returns:: Array
+
+method:: allTags
+Return a list of all registered tag symbols.
+returns:: Array
+
+method:: restoreFromNode
+Restore namespace state from an existing server node.
+argument:: node
+Server node reference.
+returns:: nil
+discussion::
+Used internally during graph rebuild or space restoration.
+Not intended for direct user invocation.
