@@ -257,7 +257,7 @@ NdMSpace : LazyEnvir {
 	}
 
 	*dumpKey { |keySymbol|
-		NdMNameSpace.dumpKey(keySymbol);
+		NdMNameSpace.dumpKey(keySymbol.asSymbol);
 		^this;
 	}
 
@@ -309,7 +309,7 @@ NdMSpace : LazyEnvir {
 	// Get NdM instance by key (or nil if not found).
 	*get { |key|
 		var instance;
-		instance = NdM.find(key);
+		instance = NdM.find(key.asSymbol);
 		^instance;
 	}
 
@@ -400,7 +400,7 @@ NdMSpace : LazyEnvir {
 	}
 
 	dumpKey { |keySymbol|
-		NdMSpace.dumpKey(keySymbol);
+		NdMSpace.dumpKey(keySymbol.asSymbol);
 		^this;
 	}
 
@@ -1837,6 +1837,7 @@ NdMSpace : LazyEnvir {
 		var oldVal;
 		var xr;
 
+		key = key.asSymbol;
 		oldVal = envir.at(key);
 
 		if(obj.isKindOf(NdMSpaceSpec)) {
@@ -2246,6 +2247,7 @@ NdMSpace : LazyEnvir {
 		var obj;
 		var ndmObj;
 
+		key = key.asSymbol;
 		obj = envir.at(key);
 
 		if(obj.isNil) {
@@ -2439,20 +2441,20 @@ NdMSpaceSpec : Object {
 		if(tagBuffer.isNil) {
 			tagBuffer = Array.new;
 		};
-		tagBuffer = tagBuffer.add(tagSymbol);
+		tagBuffer = tagBuffer.add(tagSymbol.asSymbol);
 		^this;   // chainable
 	}
 
 	untag { |tagSymbol|
 		if(tagBuffer.notNil) {
-			tagBuffer.remove(tagSymbol);
+			tagBuffer.remove(tagSymbol.asSymbol);
 		};
 		^this;
 	}
 
 	// aliases (for NdMSpaceSpec builder)
 	t { |tagSymbol|
-		^this.tag(tagSymbol);
+		^this.tag(tagSymbol.asSymbol);
 	}
 
 	// Called after NdM creation to apply buffered tags

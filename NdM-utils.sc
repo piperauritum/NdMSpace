@@ -259,7 +259,7 @@ NdMTag : Object {
 		var ndmInstance;
 
 		// Retrieve all NdM instances that have the given tag via NdMNameSpace.
-		nodes = this.nodesForTag(tagSymbol);
+		nodes = this.nodesForTag(tagSymbol.asSymbol);
 
 		// Call .play on each instance (using the current fade settings of NdM).
 		nodes.do { |ndmInstance|
@@ -272,7 +272,7 @@ NdMTag : Object {
 	*stop { |tagSymbol|
 		var nodes;
 
-		nodes = this.nodesForTag(tagSymbol);
+		nodes = this.nodesForTag(tagSymbol.asSymbol);
 		nodes.do { |ndmInstance|
 			if(ndmInstance.notNil) {
 				ndmInstance.stop;
@@ -285,7 +285,7 @@ NdMTag : Object {
 	*free { |tagSymbol|
 		var nodes;
 
-		nodes = this.nodesForTag(tagSymbol);
+		nodes = this.nodesForTag(tagSymbol.asSymbol);
 		nodes.do { |ndmInstance|
 			if(ndmInstance.notNil) {
 				ndmInstance.free;
@@ -300,7 +300,7 @@ NdMTag : Object {
 		var nodes;
 
 		monitor = NdMNameSpace.acquire;
-		nodes = monitor.nodesForTag(tagSymbol);
+		nodes = monitor.nodesForTag(tagSymbol.asSymbol);
 		^nodes;
 	}
 
@@ -527,6 +527,7 @@ NdMTrace : Object {
 		var monitor;
 		var result;
 
+		tagSymbol = tagSymbol.asSymbol;
 		monitor = NdMNameSpace.acquire;
 
 		if(tagSymbol.isNil) {
@@ -545,7 +546,7 @@ NdMTrace : Object {
 		var monitor;
 
 		monitor = NdMNameSpace.acquire;
-		monitor.removeTag(key, tagSymbol);
+		monitor.removeTag(key, tagSymbol.asSymbol);
 		^this;
 	}
 }

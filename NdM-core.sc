@@ -1228,7 +1228,7 @@ NdM : Object {
 	}
 
 	t { |tagSymbol|
-		^this.tag(tagSymbol);
+		^this.tag(tagSymbol.asSymbol);
 	}
 
 	p {
